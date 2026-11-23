@@ -88,6 +88,9 @@ func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, err
 		}
 		return rs.present(err, re, problem.Problem{Status: re.Status})
 	}
+	if p, ok := cancelled(req, err); ok {
+		return p, err
+	}
 	p, ok, perr := rs.mapped(err)
 	if perr != nil {
 		return internalProblem(), errors.Join(err, perr)
@@ -126,6 +129,22 @@ func (rs *resolver) present(err, cause error, fixed problem.Problem) (problem.Pr
 		return fixed, errors.Join(err, fmt.Errorf("%w: %w", ErrInvalidProblem, verr))
 	}
 	return p, err
+}
+
+// cancelled answers an error caused by the request's own context ending:
+// 499 when the client went away, 503 when the deadline passed. Mappers are
+// not consulted, so a catch-all mapper cannot turn either into a 500. An
+// error that does not wrap the context's error, such as a not-found found
+// just before the deadline, is the endpoint's to describe.
+func cancelled(req *http.Request, err error) (problem.Problem, bool) {
+	cause := req.Context().Err()
+	if cause == nil || !errors.Is(err, cause) {
+		return problem.Problem{}, false
+	}
+	if cause == context.Canceled {
+		return problem.Problem{Status: statusClientClosedRequest}, true
+	}
+	return problem.Problem{Status: http.StatusServiceUnavailable}, true
 }
 
 func internalProblem() problem.Problem {

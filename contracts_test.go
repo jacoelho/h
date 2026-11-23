@@ -473,3 +473,39 @@ func TestDomainMapperSeesParamsErrorWrappedByEndpoint(t *testing.T) {
 		t.Fatalf("problem %+v, want the domain mapper's type", p)
 	}
 }
+
+func TestContextEndingIsAnsweredByTheRouter(t *testing.T) {
+	notFound := errors.New("not found")
+	catchAll := problem.Func(func(error) (problem.Problem, bool) { return problem.Problem{Status: http.StatusInternalServerError}, true })
+	r := newRouter(t, h.Config{Errors: problem.Map(problem.Is(notFound, problem.Problem{Status: http.StatusNotFound}), catchAll)})
+	after := func(fail func(ctx context.Context) error) h.Endpoint[h.Empty, h.Empty] {
+		return func(ctx context.Context, _ h.Request[h.Empty]) (h.Response[h.Empty], error) {
+			<-ctx.Done()
+			return h.Response[h.Empty]{}, fail(ctx)
+		}
+	}
+	r.Get("/wraps", after(func(ctx context.Context) error { return fmt.Errorf("query: %w", ctx.Err()) }))
+	r.Get("/unrelated", after(func(context.Context) error { return errors.New("driver: connection lost") }))
+	r.Get("/notfound", after(func(context.Context) error { return notFound }))
+	c := htest.New(t, r)
+
+	for _, tc := range []struct {
+		path   string
+		cancel bool
+		want   int
+	}{
+		{"/wraps", false, http.StatusServiceUnavailable},
+		{"/wraps", true, 499},
+		{"/unrelated", false, http.StatusInternalServerError},
+		{"/notfound", false, http.StatusNotFound},
+	} {
+		ctx, stop := context.WithTimeout(context.Background(), time.Millisecond)
+		if tc.cancel {
+			stop()
+		}
+		if got := c.Send(httptest.NewRequestWithContext(ctx, "GET", tc.path, nil)).Code; got != tc.want {
+			t.Errorf("GET %s (cancelled %v): %d, want %d", tc.path, tc.cancel, got, tc.want)
+		}
+		stop()
+	}
+}
