@@ -133,8 +133,13 @@ func (rs *resolver) observe(req *http.Request, err error, p problem.Problem) {
 
 func (rs *resolver) write(w http.ResponseWriter, req *http.Request, p problem.Problem) {
 	h := w.Header()
-	for _, k := range representationFields {
-		h.Del(k)
+	h.Del("Content-Length")
+	if tw, ok := w.(*trackingWriter); ok {
+		for i, k := range representationFields {
+			if tw.inherited&(1<<i) == 0 {
+				h.Del(k)
+			}
+		}
 	}
 	if p.Status == statusClientClosedRequest {
 		w.WriteHeader(p.Status)
@@ -168,11 +173,13 @@ func (rs *resolver) write(w http.ResponseWriter, req *http.Request, p problem.Pr
 	_, _ = w.Write(buf.Bytes())
 }
 
-// representationFields describe a response body the handler meant to send;
-// a problem replaces that body, so they would describe the wrong one, as
-// net/http's own error responses also drop them (Go 1.23 release notes,
-// net/http).
-var representationFields = []string{"Content-Length", "Content-Encoding", "Content-Range", "Content-Disposition", "ETag", "Last-Modified", "Cache-Control"}
+// representationFields describe a response body. A problem replaces the
+// body a route meant to send, so the fields the route set would describe
+// the wrong one. Fields set before the route was entered are kept: they
+// come from middleware that also handles the problem's body, which is why
+// http.Error keeps Content-Encoding (go.dev/issue/66343). At most eight,
+// to fit trackingWriter.inherited.
+var representationFields = []string{"Content-Encoding", "Content-Range", "Content-Disposition", "ETag", "Last-Modified", "Cache-Control"}
 
 // addVary adds each field name in value to the Vary field unless present.
 func addVary(h http.Header, value string) {

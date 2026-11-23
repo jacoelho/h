@@ -36,8 +36,10 @@ type DecodeError struct {
 	Err error
 }
 
+// Error describes the malformed input.
 func (e *DecodeError) Error() string { return "codec: malformed input: " + e.Err.Error() }
 
+// Unwrap returns the decoder's error.
 func (e *DecodeError) Unwrap() error { return e.Err }
 
 // Sequence is a value written as a sequence of elements, such as a JSON

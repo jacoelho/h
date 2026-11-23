@@ -86,16 +86,29 @@ func (c *Client) Do(method, path string, body any, opts ...RequestOption) *Respo
 	return c.Send(req)
 }
 
-// Send sends req as it is.
-func (c *Client) Send(req *http.Request) *Response {
-	w := httptest.NewRecorder()
-	c.handler.ServeHTTP(w, req)
-	return &Response{ResponseRecorder: w}
+// Send sends req as it is. A handler that aborts the response with
+// http.ErrAbortHandler, as the router does when a response fails after it
+// started, yields a Response with Aborted set; any other panic propagates.
+func (c *Client) Send(req *http.Request) (resp *Response) {
+	resp = &Response{ResponseRecorder: httptest.NewRecorder()}
+	defer func() {
+		if v := recover(); v != nil {
+			if v != http.ErrAbortHandler {
+				panic(v)
+			}
+			resp.Aborted = true
+		}
+	}()
+	c.handler.ServeHTTP(resp.ResponseRecorder, req)
+	return resp
 }
 
 // Response is an answer recorded by a Client.
 type Response struct {
 	*httptest.ResponseRecorder
+	// Aborted reports that the handler cut the connection after the
+	// response started: a client would see a failed response.
+	Aborted bool
 }
 
 // Expect fails t unless the response has status, showing the body.

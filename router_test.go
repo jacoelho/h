@@ -50,14 +50,9 @@ func TestHandle(t *testing.T) {
 	if title := w.Problem(t).Title; title != "No photo" {
 		t.Fatalf("title %v", title)
 	}
-	func() {
-		defer func() {
-			if v := recover(); v != http.ErrAbortHandler {
-				t.Fatalf("recovered %v, want the connection aborted", v)
-			}
-		}()
-		send(t, r, call{method: "GET", target: "/photos/a.txt?fail"})
-	}()
+	if !send(t, r, call{method: "GET", target: "/photos/a.txt?fail"}).Aborted {
+		t.Fatal("error after writing did not abort the connection")
+	}
 	if !errors.Is(log.Last(t).Err, h.ErrEncodeAfterCommit) {
 		t.Fatalf("OnError got %v", log.Last(t).Err)
 	}

@@ -200,7 +200,7 @@ r.Post("/photos", func(ctx context.Context, req h.Request[h.RawBody]) (h.Respons
 }, h.Consumes("image/*"), h.MaxBody(10<<20))
 ```
 
-Reading the body is bounded by `MaxBody`. A body that is malformed, too large or too slow is answered with 400, 413 or 408. For `h.RawBody` and `h.Seq[T]`, which the endpoint reads itself, that happens when the endpoint returns the read error.
+An endpoint taking `h.RawBody` or `h.Seq[T]` may keep reading the body after its response has started, such as when it streams one output element per input element. Reading the body is bounded by `MaxBody`. A body that is malformed, too large or too slow is answered with 400, 413 or 408. For `h.RawBody` and `h.Seq[T]`, which the endpoint reads itself, that happens when the endpoint returns the read error.
 
 ## Stream a response
 
@@ -227,11 +227,16 @@ r.Get("/report.csv", func(ctx context.Context, _ h.Request[h.Empty]) (h.Response
 
 Responses up to `SpillAt` bytes are buffered and sent with `Content-Length`. While the response is still buffered, an encoding error becomes a problem. Once the response has started, an error aborts the connection, so the client sees a failed response rather than a truncated one that looks complete.
 
-For a handler that must write the response itself, such as `http.FileServer`, use `Handle`:
+For a handler that must write the response itself, such as one serving files, use `Handle`. An error it returns before writing is answered as a problem:
 
 ```go
-r.Handle("GET", "/static/{file...}", h.Raw(http.FileServer(http.Dir("static"))))
+r.Handle("GET", "/static/{file...}", func(w http.ResponseWriter, req *http.Request) error {
+	http.ServeFileFS(w, req, os.DirFS("static"), req.PathValue("file"))
+	return nil
+})
 ```
+
+`http.FileServer` does not fit here unwrapped: it looks up the whole request path, base path included. Wrap it in `http.StripPrefix` with the mounted prefix if you need it.
 
 ## Set limits and media types
 
@@ -346,7 +351,7 @@ func TestCreateOrder(t *testing.T) {
 }
 ```
 
-`Do` sends a struct as JSON, and a string, `[]byte` or `io.Reader` as is. `Response.JSON[T]` decodes strictly. `Response.Problem` fails unless the body is a problem. `htest.Errors` records `OnError` calls. Use `Send` for a request you built yourself, and `httptest.NewServer` when you need a real connection.
+`Do` sends a struct as JSON, and a string, `[]byte` or `io.Reader` as is. `Response.JSON[T]` decodes strictly. `Response.Problem` fails unless the body is a problem. `htest.Errors` records `OnError` calls. When the router aborts a response that failed after it started, `Response.Aborted` is set. Use `Send` for a request you built yourself, and `httptest.NewServer` when you need a real connection.
 
 To call an endpoint without a router, build its request with `h.NewRequest`, `h.NewFormRequest` or `h.NewRawBody`. Run a `Stream` with `Stream.WriteTo`.
 

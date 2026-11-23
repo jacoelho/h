@@ -75,16 +75,15 @@ type Router struct {
 }
 
 type core struct {
-	base     string
-	cfg      Config
-	codecs   *codec.Set
-	csrf     *http.CrossOriginProtection
-	cors     corsPolicy
-	resolver *resolver
-	use      []Middleware
-	routes   []pending
-	errs     []error
-	served   *served
+	base   string
+	cfg    Config
+	codecs *codec.Set
+	csrf   *http.CrossOriginProtection
+	cors   corsPolicy
+	use    []Middleware
+	routes []pending
+	errs   []error
+	served *served
 }
 
 // served is what Handler built from the registrations. A core is
@@ -150,13 +149,11 @@ func New(cfg Config) (*Router, error) {
 	if c.cors, err = newCORSPolicy(cfg.TrustedOrigins, cfg.CORS); err != nil {
 		return nil, err
 	}
-	if c.resolver, err = newResolver(rootMappers(cfg), cfg.ProblemFormats, cfg.OnError); err != nil {
+	if _, err := newResolver(nil, cfg.ProblemFormats, nil); err != nil {
 		return nil, err
 	}
 	return &Router{core: c}, nil
 }
-
-func rootMappers(cfg Config) []problem.Mapper { return []problem.Mapper{cfg.Errors} }
 
 func basePath(p string) (string, error) {
 	p = strings.TrimSuffix(p, "/")
@@ -532,6 +529,7 @@ func (r *Router) Handle(method, path string, fn func(http.ResponseWriter, *http.
 	r.register(method, path, opts, func(res resolved, _ string) (http.Handler, error) {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			tw := &trackingWriter{ResponseWriter: w}
+			tw.inherit()
 			req.Body = newBodyReader(w, req, res.maxBody)
 			if err := contain(func() error { return fn(tw, req) }); err != nil {
 				tw.answer(req, res.resolver, err)
@@ -588,6 +586,20 @@ func (r *Router) Fallback() {
 type trackingWriter struct {
 	http.ResponseWriter
 	wrote bool
+	// inherited marks the representation fields (representationFields)
+	// already set when the route was entered, by middleware outside it: a
+	// problem keeps those, since that middleware also shapes the problem's
+	// body, as a compressing writer does.
+	inherited uint8
+}
+
+func (t *trackingWriter) inherit() {
+	h := t.Header()
+	for i, k := range representationFields {
+		if _, ok := h[k]; ok {
+			t.inherited |= 1 << i
+		}
+	}
 }
 
 // WriteHeader sends the status. An informational status (1xx other than

@@ -50,10 +50,12 @@ type RequestError struct {
 	Err    error
 }
 
+// Error describes the refused request and its cause.
 func (e *RequestError) Error() string {
 	return fmt.Sprintf("h: request refused with %d %s: %v", e.Status, http.StatusText(e.Status), e.Err)
 }
 
+// Unwrap returns the cause.
 func (e *RequestError) Unwrap() error { return e.Err }
 
 // PanicError is an endpoint panic, reported to OnError. It matches ErrPanic.
@@ -62,8 +64,10 @@ type PanicError struct {
 	Stack []byte
 }
 
+// Error describes the panic value.
 func (e *PanicError) Error() string { return fmt.Sprintf("h: endpoint panicked: %v", e.Value) }
 
+// Unwrap returns ErrPanic, so errors.Is(err, ErrPanic) matches.
 func (e *PanicError) Unwrap() error { return ErrPanic }
 
 // sourceError is an error a Seq's source iterator yielded while the

@@ -285,3 +285,19 @@ func TestJSONOptionsApplyToSequenceElements(t *testing.T) {
 		t.Fatalf("got %s", got)
 	}
 }
+
+func TestJSONSequenceKeepsReadErrorAfterClosingBracket(t *testing.T) {
+	readErr := errors.New("connection reset")
+	var tg target
+	if err := (codec.JSON{}).Decode(io.MultiReader(strings.NewReader(`[{"id":"a"}]`), &failingReader{readErr}), &tg); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	for more := true; more && err == nil; {
+		var o order
+		more, err = tg.next(&o)
+	}
+	if !errors.Is(err, readErr) {
+		t.Fatalf("err = %v, want the reader's error", err)
+	}
+}

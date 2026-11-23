@@ -34,6 +34,7 @@ type ParamError struct {
 	Err  error
 }
 
+// Error lists each parameter that was missing or malformed.
 func (e *ParamsError) Error() string {
 	parts := make([]string, len(e.Params))
 	for i, p := range e.Params {
@@ -117,11 +118,8 @@ func (p *Params) Path[T any](name string, parse func(string) (T, error)) T {
 
 func (p *Params) queryAll(name string) []string {
 	q, err := p.st.queryValues()
-	if err != nil {
-		if !slices.ContainsFunc(p.errs, func(e ParamError) bool { return e.In == "query" && e.Name == "" }) {
-			p.fail("query", "", err)
-		}
-		return nil
+	if err != nil && !slices.ContainsFunc(p.errs, func(e ParamError) bool { return e.In == "query" && e.Name == "" }) {
+		p.fail("query", "", err)
 	}
 	return q[name]
 }

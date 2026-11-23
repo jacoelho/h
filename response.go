@@ -13,6 +13,7 @@ import (
 // a Seq it is an empty sequence.
 type Response[Out any] struct {
 	status   int
+	explicit bool // status was chosen with Status, so 0 is a mistake, not the default
 	header   []headerField
 	body     Out
 	bodiless bool
@@ -42,7 +43,9 @@ func NotModified[T any]() Response[T] {
 // Status answers code with v. Codes that forbid a body (1xx, 204, 304) and
 // codes outside 200 to 599 are refused when the response is written: use
 // NoContent or NotModified.
-func Status[T any](code int, v T) Response[T] { return Response[T]{status: code, body: v} }
+func Status[T any](code int, v T) Response[T] {
+	return Response[T]{status: code, explicit: true, body: v}
+}
 
 // WithHeader returns a copy of r with a header field added. Content-Type and
 // Content-Length belong to the router and are refused when the response is
@@ -81,7 +84,7 @@ func (r Response[T]) validate(outEmpty bool) error {
 			return fmt.Errorf("%w: header %s belongs to the router", ErrInvalidResponse, f.key)
 		}
 	}
-	if r.bodiless || r.status == 0 {
+	if r.bodiless || (r.status == 0 && !r.explicit) {
 		return nil
 	}
 	switch {
