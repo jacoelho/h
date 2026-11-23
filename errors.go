@@ -39,6 +39,13 @@ var (
 	ErrMissing = errors.New("h: missing")
 	// ErrConsumed reports a second pass over a single-pass Seq.
 	ErrConsumed = errors.New("h: sequence already consumed")
+
+	errMultipartCleanup = errors.New("h: removing multipart files")
+	// errConnectionLost marks a failure after the response started that is
+	// the connection's. The router records it in the error as the response
+	// fails, since every server cancels the request's context once the
+	// handler returns and the context cannot tell afterwards.
+	errConnectionLost = errors.New("h: connection lost")
 )
 
 // RequestError is a request the router refuses with a fixed status: a body

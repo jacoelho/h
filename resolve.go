@@ -28,6 +28,33 @@ type Failure struct {
 	Problem problem.Problem
 }
 
+// Hidden reports whether the problem the client got, or its absence, does
+// not show the failure, so a policy keyed on Problem.Status would miss it:
+//   - a panic (ErrPanic), wherever it happened and whatever was answered;
+//   - a mapper or Annotate answer the router discarded (ErrInvalidProblem),
+//     sent with the router's own status;
+//   - a problem that could not be written in the negotiated format
+//     (ErrProblemFormat);
+//   - multipart temporary files that could not be removed;
+//   - a response that failed after it started (ErrEncodeAfterCommit),
+//     including one cut by the server's WriteTimeout, unless the failure
+//     is the connection's because the client went away: the reported error
+//     is the failed write or flush to the client, or the request's canceled
+//     context.
+//
+// Hidden depends only on Err, so it gives the same answer after the request
+// ends. In Annotate, which runs before the problem is written, only a
+// discarded mapper answer or a mapper's panic is known.
+func (f Failure) Hidden() bool {
+	switch {
+	case errors.Is(f.Err, ErrPanic), errors.Is(f.Err, ErrInvalidProblem), errors.Is(f.Err, ErrProblemFormat), errors.Is(f.Err, errMultipartCleanup):
+		return true
+	case errors.Is(f.Err, ErrEncodeAfterCommit):
+		return !errors.Is(f.Err, errConnectionLost)
+	}
+	return false
+}
+
 const statusClientClosedRequest = 499
 
 // mapping holds a scope's mappers in the order they are tried: domain
@@ -95,13 +122,13 @@ func (rs *resolver) resolve(req *http.Request, err error) (problem.Problem, erro
 
 // annotated lets Config.Annotate add request data to p. An answer that
 // changes the status or is invalid, or a panic, is reported and p stands.
-func (rs *resolver) annotated(req *http.Request, report error, p problem.Problem) (q problem.Problem, _ error) {
+func (rs *resolver) annotated(req *http.Request, report error, p problem.Problem) (q problem.Problem, rerr error) {
 	if rs.annotate == nil {
 		return p, report
 	}
 	defer func() {
 		if v := recover(); v != nil {
-			q, report = p, errors.Join(report, panicError(v))
+			q, rerr = p, errors.Join(report, panicError(v))
 		}
 	}()
 	q = rs.annotate(Failure{Request: req, Err: report, Problem: clone(p)})

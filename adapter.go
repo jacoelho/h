@@ -163,7 +163,7 @@ func (a *adapter[In, Out]) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		if err := x.cleanup(); err != nil {
-			rs.observe(req, fmt.Errorf("h: removing multipart files: %w", err), problem.Problem{})
+			rs.observe(req, fmt.Errorf("%w: %w", errMultipartCleanup, err), problem.Problem{})
 		}
 	}()
 	if err := contain(func() error { return a.serve(c, req) }); err != nil {
