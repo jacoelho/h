@@ -19,8 +19,10 @@ var (
 	// ErrInvalidResponse reports a Response that cannot be written, such as
 	// a body with status 204 or a Content-Type set by the endpoint.
 	ErrInvalidResponse = errors.New("h: invalid response")
-	// ErrInvalidProblem reports a mapper result that cannot be written, or
-	// one that changes the fixed status of an error the router owns.
+	// ErrInvalidProblem reports a problem the router discarded: a mapper,
+	// Annotate or problem.Error answer that is invalid, a RequestErrors
+	// answer outside 4xx, an Annotate answer that changes the status, or a
+	// RequestError with a status outside 400 to 599.
 	ErrInvalidProblem = errors.New("h: invalid problem")
 	// ErrPanic reports an endpoint that panicked; see PanicError.
 	ErrPanic = errors.New("h: endpoint panicked")

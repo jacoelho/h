@@ -53,8 +53,8 @@ func TestHandle(t *testing.T) {
 	if !send(t, r, call{method: "GET", target: "/photos/a.txt?fail"}).Aborted {
 		t.Fatal("error after writing did not abort the connection")
 	}
-	if !errors.Is(log.Last(t).Err, h.ErrEncodeAfterCommit) {
-		t.Fatalf("OnError got %v", log.Last(t).Err)
+	if last := log.Last(t); !errors.Is(last.Err, h.ErrEncodeAfterCommit) || last.Problem.Status != 0 {
+		t.Fatalf("OnError got %v with %+v, want the zero Problem after the response started", last.Err, last.Problem)
 	}
 }
 

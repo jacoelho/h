@@ -650,3 +650,34 @@ func TestEmptyGroupPrefixAppliesOnlyOptions(t *testing.T) {
 	c.Do("GET", "/orders", nil).Expect(t, http.StatusConflict)
 	c.Do("GET", "/other", nil).Expect(t, http.StatusInternalServerError)
 }
+
+type carriedServings int
+
+func (s *carriedServings) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if _, err := dec.ReadValue(); err != nil {
+		return err
+	}
+	return problem.Error(problem.Problem{Status: http.StatusInternalServerError, Title: "leaked"})
+}
+
+func TestProblemCarriedInsideARefusalStays4xx(t *testing.T) {
+	type order struct {
+		Servings carriedServings `json:"servings"`
+	}
+	r := newRouter(t, h.Config{})
+	r.Post("/orders", h.Func(func(_ context.Context, in order) (order, error) { return in, nil }))
+	p := htest.New(t, r).Do("POST", "/orders", `{"servings":2}`, htest.Header("Content-Type", "application/json")).Expect(t, http.StatusBadRequest).Problem(t)
+	if p.Title == "leaked" {
+		t.Fatalf("carried problem escaped the refusal: %+v", p)
+	}
+}
+
+func TestAllowIsSentOnlyWhileTheStatusIs405(t *testing.T) {
+	r := newRouter(t, h.Config{RequestErrors: problem.Is(h.ErrMethodNotAllowed, problem.Problem{Status: http.StatusNotFound})})
+	r.Get("/x", respond(h.OK(item{"a"})))
+	r.Fallback()
+	resp := htest.New(t, r).Do("DELETE", "/x", nil).Expect(t, http.StatusNotFound)
+	if allow := resp.Header().Get("Allow"); allow != "" {
+		t.Fatalf("Allow %q on a 404", allow)
+	}
+}

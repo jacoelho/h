@@ -37,9 +37,12 @@ func RequestIDFrom(ctx context.Context) (string, bool) {
 }
 
 // AccessLog returns middleware that logs one line per request to log at
-// level: method, route pattern, path, status, bytes written, duration and,
+// level, or at info level when level is nil: method, route pattern, path, status, bytes written, duration and,
 // when RequestID runs before it, the request ID.
 func AccessLog(log *slog.Logger, level slog.Leveler) func(http.Handler) http.Handler {
+	if level == nil {
+		level = slog.LevelInfo
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			start := time.Now()

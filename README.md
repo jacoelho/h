@@ -163,7 +163,7 @@ The mapper constructors are:
 
 The route's mappers are tried first, then its groups', then `Config.Errors`.
 
-For a one-off answer that no mapper needs to know, return `problem.Error(p)`. The router sends the problem as it is, after checking it is valid, without consulting mappers. `problem.FromError` gets it back, for tests or middleware:
+For a one-off answer that no mapper needs to know, return `problem.Error(p)`. The router sends the problem as it is, after checking it is valid, without consulting mappers, even when the error is wrapped. Wrap only problems your own code made, since a problem built from another service's response is sent verbatim. Inside a refusal, such as from a custom unmarshaler, it is offered to `RequestErrors` mappers like any other wrapped error. `problem.FromError` gets it back, for tests or middleware:
 
 ```go
 if stock == 0 {
@@ -223,7 +223,7 @@ var RefusalProblems = problem.Map(
 r, err := h.New(h.Config{RequestErrors: RefusalProblems})
 ```
 
-Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. The last format listed answers a client whose `Accept` matches none, as RFC 9110 allows. The default list is `problem.RFC9457` then `problem.Text`. A list you set replaces it, so `[]problem.Format{problem.RFC9457}` answers every client with JSON. A format and `OnError` receive the status's reason phrase as the title of an `about:blank` problem that has none. `problem.Read` decodes a problem body, for clients and tests.
+Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. The last format listed answers a client whose `Accept` matches none, as RFC 9110 allows. The default list is `problem.RFC9457` then `problem.Text`. A list you set replaces it, so `[]problem.Format{problem.RFC9457}` answers every client with JSON. `Annotate`, the format and `OnError` receive the status's reason phrase as the title of an `about:blank` problem that has none. `problem.Read` decodes a problem body, for clients and tests.
 
 ## Read forms, uploads and sequences
 
@@ -321,7 +321,8 @@ Options apply to a group or a single route. The closest setting wins:
 | `h.SpillAt(n)` | `Config.SpillAt`, 64 KiB | response bytes buffered before streaming |
 | `h.Consumes(ranges...)` | every registered decoder | narrows the accepted `Content-Type`; others get 415 |
 | `h.Produces(ranges...)` | every registered encoder | narrows what the route writes; an unmet `Accept` gets 406 |
-| `h.Errors(m)` | none | adds a mapper |
+| `h.Errors(m)` | none | adds a mapper for the errors endpoints return |
+| `h.RequestErrors(m)` | none | adds a mapper for the requests the router refuses |
 | `h.ProblemFormats(fs...)` | `Config.ProblemFormats` | formats for this scope's problems |
 | `h.Use(mw...)` | none | middleware for this scope |
 

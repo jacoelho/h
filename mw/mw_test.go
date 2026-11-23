@@ -91,3 +91,12 @@ func TestTimeoutSetsDeadline(t *testing.T) {
 		t.Fatalf("deadline %v away, want about a minute", left)
 	}
 }
+
+func TestAccessLogWithoutALevelLogsAtInfo(t *testing.T) {
+	var buf bytes.Buffer
+	handler := mw.AccessLog(slog.New(slog.NewTextHandler(&buf, nil)), nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	if !strings.Contains(buf.String(), "level=INFO") {
+		t.Fatalf("log %q, want an info line", buf.String())
+	}
+}
