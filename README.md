@@ -262,20 +262,21 @@ orders.Get("/export", func(ctx context.Context, _ h.Request[h.Empty]) (h.Respons
 })
 ```
 
-NDJSON is not in the default codec set. Register it with `codec.Set.Encodes` and `Decodes`, and pass the set as `Config.Codecs`. Another JSON media type works the same way. This download is JSON-LD with object members in a fixed order:
+NDJSON is not in the default codec set. Register it with `codec.Set.Encodes` and `Decodes`. Every route offers the codecs in `Config.Codecs`. Give a media type that only some routes write its own set with `h.Codecs`. This download is JSON-LD with object members in a fixed order, and no other route answers JSON-LD:
 
 ```go
-codecs := codec.Default(codec.JSON{})
-ld := codec.JSON{Options: []json.Options{json.Deterministic(true)}}
-if err := codecs.Encodes(ld, "application/ld+json"); err != nil {
+ld := codec.NewSet()
+if err := ld.Encodes(codec.JSON{Options: []json.Options{json.Deterministic(true)}}, "application/ld+json"); err != nil {
 	log.Fatal(err)
 }
 
 r.Get("/orders.jsonld", func(ctx context.Context, _ h.Request[h.Empty]) (h.Response[h.Seq[Order]], error) {
 	return h.OK(h.Items(svc.All(ctx))).
 		WithHeader("Content-Disposition", `attachment; filename="orders.jsonld"`), nil
-}, h.Produces("application/ld+json"))
+}, h.Codecs(ld))
 ```
+
+Like any route whose body a codec writes, it answers 406 to an `Accept` its codecs cannot meet, such as `application/json`. The file name here is fixed. For a name that comes from data, build the field with `mime.FormatMediaType("attachment", map[string]string{"filename": name})`, which quotes the name when needed and writes a non-ASCII one percent-encoded as `filename*` only.
 
 Return `h.Stream` to write bytes in a content type of your own:
 
@@ -319,6 +320,7 @@ Options apply to a group or a single route. The closest setting wins:
 | `h.MaxBody(n)` | `Config.MaxBody`, 1 MiB | request bodies larger than `n` bytes are answered with 413 |
 | `h.MaxMemory(n)` | `Config.MaxMemory`, 1 MiB | multipart data held in memory; the rest goes to temporary files |
 | `h.SpillAt(n)` | `Config.SpillAt`, 64 KiB | response bytes buffered before streaming |
+| `h.Codecs(set)` | `Config.Codecs` | the codecs the scope negotiates between; sets are not merged |
 | `h.Consumes(ranges...)` | every registered decoder | narrows the accepted `Content-Type`; others get 415 |
 | `h.Produces(ranges...)` | every registered encoder | narrows what the route writes; an unmet `Accept` gets 406 |
 | `h.Errors(m)` | none | adds a mapper for the errors endpoints return |
@@ -326,7 +328,7 @@ Options apply to a group or a single route. The closest setting wins:
 | `h.ProblemFormats(fs...)` | `Config.ProblemFormats` | formats for this scope's problems |
 | `h.Use(mw...)` | none | middleware for this scope |
 
-`Config.Codecs` holds the codecs every route negotiates between, `codec.Default(codec.JSON{})` when nil. To refuse JSON objects with members no field matches, pass `codec.Default(codec.JSON{RejectUnknownFields: true})`. The same codec writes responses, so its `Options` apply to both directions.
+`Config.Codecs` holds the codecs routes negotiate between unless `h.Codecs` gives a group or route its own, `codec.Default(codec.JSON{})` when nil. `codec.Default` reads `application/json` and every `application/*+json` type, so a JSON route also accepts an `application/ld+json` body. `h.Consumes("application/json")` narrows it. To refuse JSON objects with members no field matches, pass `codec.Default(codec.JSON{RejectUnknownFields: true})`. The same codec writes responses, so its `Options` apply to both directions.
 
 ## Set time limits
 

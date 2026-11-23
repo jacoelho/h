@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/jacoelho/h/codec"
 	"github.com/jacoelho/h/problem"
 )
 
@@ -21,6 +22,7 @@ type level struct {
 	mappers   []problem.Mapper
 	refusals  []problem.Mapper
 	formats   []problem.Format
+	codecs    *codec.Set
 	produces  []string
 	consumes  []string
 	maxBody   int64
@@ -85,6 +87,21 @@ func Use(ms ...Middleware) Option {
 			return errors.New("Use with a nil middleware")
 		}
 		l.use = append(l.use, ms...)
+		return nil
+	}}
+}
+
+// Codecs sets the codecs a group's or route's endpoints negotiate between,
+// in place of Config.Codecs. The closest setting wins; sets are not merged,
+// so s must hold every codec the scope reads and writes. Produces and
+// Consumes narrow it. Use it for a media type only some routes offer, which
+// registered on Config.Codecs would be offered by every route.
+func Codecs(s *codec.Set) Option {
+	return Option{apply: func(l *level) error {
+		if s == nil {
+			return errors.New("Codecs with a nil set")
+		}
+		l.codecs = s
 		return nil
 	}}
 }

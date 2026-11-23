@@ -84,7 +84,7 @@ func registerEndpoint[In, Out any](r *Router, method, path string, e Endpoint[In
 		if outK == outEncoded {
 			encodeT = outT
 		}
-		route, err := r.core.codecs.For(decodeT, encodeT, res.consumes, res.produces)
+		route, err := res.codecs.For(decodeT, encodeT, res.consumes, res.produces)
 		if err != nil {
 			return nil, err
 		}
