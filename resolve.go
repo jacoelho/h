@@ -123,6 +123,12 @@ func clone(p problem.Problem) problem.Problem {
 }
 
 func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, error) {
+	if p, ok := problem.FromError(err); ok {
+		if verr := p.Validate(); verr != nil {
+			return internalProblem(), errors.Join(err, fmt.Errorf("%w: %w", ErrInvalidProblem, verr))
+		}
+		return p, err
+	}
 	if pe, ok := errors.AsType[*ParamsError](err); ok {
 		return rs.refuse(err, err, pe.problem())
 	}
