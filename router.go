@@ -2,11 +2,13 @@ package h
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"path"
 	"runtime/debug"
 	"slices"
@@ -623,6 +625,11 @@ func (r *Router) Fallback() {
 type trackingWriter struct {
 	http.ResponseWriter
 	wrote bool
+	// writeErr is the first error a write or flush to the client returned,
+	// kept so a failure after the response started is told apart from the
+	// connection's, whatever order the server cancels the request's
+	// context in.
+	writeErr error
 	// inherited marks the representation fields (representationFields)
 	// already set when the route was entered, by middleware outside it: a
 	// problem keeps those, since that middleware also shapes the problem's
@@ -652,14 +659,18 @@ func (t *trackingWriter) WriteHeader(code int) {
 // aborting the connection.
 func (t *trackingWriter) answer(req *http.Request, rs *resolver, err error) {
 	if t.wrote {
-		abort(req, rs, err)
+		abort(req, rs, err, t.connectionLost(req, err))
 	}
 	rs.fail(t, req, err)
 }
 
 func (t *trackingWriter) Write(b []byte) (int, error) {
 	t.wrote = true
-	return t.ResponseWriter.Write(b)
+	n, err := t.ResponseWriter.Write(b)
+	if err != nil && t.writeErr == nil {
+		t.writeErr = err
+	}
+	return n, err
 }
 
 // Unwrap lets http.ResponseController reach the underlying writer.
@@ -673,6 +684,9 @@ func (t *trackingWriter) Flush() { _ = t.FlushError() }
 // successful flush the response has started.
 func (t *trackingWriter) FlushError() error {
 	if err := http.NewResponseController(t.ResponseWriter).Flush(); err != nil {
+		if !errors.Is(err, http.ErrNotSupported) && t.writeErr == nil {
+			t.writeErr = err
+		}
 		return err
 	}
 	t.wrote = true
@@ -689,10 +703,46 @@ func (t *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return conn, brw, err
 }
 
+// connectionLost reports whether err, a failure after the response
+// started, is the connection's: the client went away. It is when err is the
+// failed write or flush to the client, unless the server raised that error
+// itself, or when err is the request's canceled context and the connection
+// does not then report the server's write deadline, which over HTTP/2 resets
+// the stream and cancels the context before any write fails. Any other
+// failure, such as a panic, is not the connection's even if the context was
+// canceled meanwhile.
+func (t *trackingWriter) connectionLost(req *http.Request, err error) bool {
+	if t.writeErr != nil && errors.Is(err, t.writeErr) {
+		return !serverWriteError(t.writeErr)
+	}
+	if !errors.Is(err, context.Canceled) || !errors.Is(req.Context().Err(), context.Canceled) {
+		return false
+	}
+	ferr := http.NewResponseController(t.ResponseWriter).Flush()
+	return ferr == nil || !serverWriteError(ferr)
+}
+
+// serverWriteError reports whether a write to the client failed for a
+// reason the server owns, not the client: its write deadline
+// (http.Server.WriteTimeout), http.TimeoutHandler's deadline, a body longer
+// than its Content-Length or not allowed for its status, or a write after
+// a hijack.
+func serverWriteError(err error) bool {
+	for _, server := range []error{os.ErrDeadlineExceeded, http.ErrHandlerTimeout, http.ErrContentLength, http.ErrBodyNotAllowed, http.ErrHijacked} {
+		if errors.Is(err, server) {
+			return true
+		}
+	}
+	return false
+}
+
 // abort reports a failure after the response started and cuts the
 // connection, so the client sees a failed response rather than a short one
 // that ends cleanly.
-func abort(req *http.Request, rs *resolver, err error) {
+func abort(req *http.Request, rs *resolver, err error, lost bool) {
+	if lost {
+		err = fmt.Errorf("%w: %w", errConnectionLost, err)
+	}
 	rs.observe(req, fmt.Errorf("%w: %w", ErrEncodeAfterCommit, err), problem.Problem{})
 	panic(http.ErrAbortHandler)
 }

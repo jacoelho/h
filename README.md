@@ -399,10 +399,13 @@ Annotate: func(f h.Failure) problem.Problem {
 },
 ```
 
-`Config.OnError` observes every failure and gets its own copy of the problem. An error found after the response was sent, such as failing to remove multipart temporary files, arrives with the zero `Problem`. Log there:
+`Config.OnError` observes every failure and gets its own copy of the problem. An error found after the response was sent, such as failing to remove multipart temporary files, arrives with the zero `Problem`. Most failures are refusals and mapped domain errors that need no log entry. Log the ones answered with a 5xx status. Also log the ones `f.Hidden()` reports, whose status does not show them. A panic and a stream that failed after it started are two:
 
 ```go
 OnError: func(f h.Failure) {
+	if f.Problem.Status < http.StatusInternalServerError && !f.Hidden() {
+		return
+	}
 	logger.ErrorContext(f.Request.Context(), "request failed", "status", f.Problem.Status, "err", f.Err)
 },
 ```
@@ -539,6 +542,7 @@ Each stateful value has one owner. Update this table when you add a state or a t
 | Router | registering, then built by the first `Handler` call | `core.served`, nil while registering |
 | Group | usable, or broken by a bad prefix or option | `Router.broken` |
 | Response | not started, then started by a final status, a body byte, a successful flush or a hijack; 1xx leaves it not started | `trackingWriter.wrote` |
+| Connection | carrying the response, then failed by the first write or flush error; a failure after the response started is the connection's, and not `Failure.Hidden`, when it is that error and the server did not raise it, or the canceled request context with no write deadline behind it | `trackingWriter.writeErr`, decided by `trackingWriter.connectionLost` |
 | Spill writer | buffering, then streaming past `SpillAt` or on flush | derived from the response's state |
 | Stream writer | open while the stream's function runs, then closed | `StreamWriter.w`, nil when closed |
 | Body reader | no deadline, or pending, armed on first read, cleared at EOF; a read error is kept | `bodyReader` |
