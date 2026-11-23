@@ -44,7 +44,9 @@ var (
 // type the route does not read (415), or an Accept field it cannot satisfy
 // (406). The router returns it from the boundaries it owns, such as the body
 // reader, so an error the endpoint produces itself is never mistaken for
-// one. Mappers may present it but not change its status.
+// one. Mappers may present it but not change its status, and are offered
+// the RequestError alone: errors wrapped around it, by a decoder or an
+// endpoint, are reported to OnError but not matched.
 type RequestError struct {
 	Status int
 	Err    error

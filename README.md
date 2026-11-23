@@ -207,7 +207,7 @@ var RequestErrors = problem.Map(
 )
 ```
 
-Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. `problem.Text` is always the last resort. A format and `OnError` receive the status's reason phrase as the title of a problem that has none. `problem.Read` decodes a problem body, for clients and tests.
+Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. `problem.Text` is always the last resort. A format and `OnError` receive the status's reason phrase as the title of an `about:blank` problem that has none. `problem.Read` decodes a problem body, for clients and tests.
 
 ## Read forms, uploads and sequences
 
@@ -416,7 +416,7 @@ func TestCreateOrder(t *testing.T) {
 }
 ```
 
-`Do` sends a struct as JSON, and a string, `[]byte` or `io.Reader` as is. `Response.JSON[T]` decodes strictly. `Response.Problem` fails unless the body is a problem. `htest.Errors` records `OnError` calls. When the router aborts a response that failed after it started, `Response.Aborted` is set. Use `Send` for a request you built yourself, and `httptest.NewServer` when you need a real connection.
+`Do` sends a struct as JSON, and a string, `[]byte` or `io.Reader` as is. `Response.JSON[T]` decodes strictly. `Response.Problem` fails unless the body is an `application/problem+json` problem. For a custom problem format, decode the body with `Response.JSON[T]` and your error type. `htest.Errors` records `OnError` calls. When the router aborts a response that failed after it started, `Response.Aborted` is set. Use `Send` for a request you built yourself, and `httptest.NewServer` when you need a real connection.
 
 To call an endpoint without a router, build its request with `h.NewRequest`, `h.NewFormRequest` or `h.NewRawBody`. Run a `Stream` with `Stream.WriteTo`.
 
