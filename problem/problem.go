@@ -73,6 +73,31 @@ func (p Problem) Validate() error {
 	return nil
 }
 
+// Error returns an error carrying p, so an endpoint can answer with a
+// problem no mapper needs to know. The h router answers it as it is, after
+// Validate, without consulting mappers, even when wrapped.
+func Error(p Problem) error { return &carried{p: p} }
+
+// FromError returns the problem carried by an error from Error anywhere in
+// err's tree, and whether there was one.
+func FromError(err error) (Problem, bool) {
+	c, ok := errors.AsType[*carried](err)
+	if !ok {
+		return Problem{}, false
+	}
+	return c.p, true
+}
+
+type carried struct{ p Problem }
+
+func (c *carried) Error() string {
+	s := fmt.Sprintf("problem: %d %s", c.p.Status, c.p.TitleOrStatus())
+	if c.p.Detail != "" {
+		s += ": " + c.p.Detail
+	}
+	return s
+}
+
 // With returns a copy of p with the extension member name set to v. p's
 // own Extra map is left unchanged, so a Problem shared with others can be
 // extended safely.

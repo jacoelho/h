@@ -620,3 +620,22 @@ func TestOnErrorCannotChangeTheResponse(t *testing.T) {
 		t.Fatalf("OnError changed the body: %+v", p.Extra)
 	}
 }
+
+func TestEndpointCanReturnAProblem(t *testing.T) {
+	var log htest.Errors
+	r := newRouter(t, h.Config{OnError: log.OnError, Errors: problem.Func(func(error) (problem.Problem, bool) {
+		return problem.Problem{Status: http.StatusInternalServerError}, true
+	})})
+	r.Get("/refuse", failing(fmt.Errorf("checking stock: %w", problem.Error(problem.Problem{Status: http.StatusConflict, Title: "Out of stock", Extra: map[string]any{"code": "out_of_stock"}}))))
+	r.Get("/invalid", failing(problem.Error(problem.Problem{Status: http.StatusOK})))
+	c := htest.New(t, r)
+
+	p := c.Do("GET", "/refuse", nil).Expect(t, http.StatusConflict).Problem(t)
+	if p.Title != "Out of stock" || p.Extra["code"] != "out_of_stock" {
+		t.Fatalf("problem %+v", p)
+	}
+	c.Do("GET", "/invalid", nil).Expect(t, http.StatusInternalServerError)
+	if !errors.Is(log.Last(t).Err, h.ErrInvalidProblem) {
+		t.Fatalf("OnError got %v, want ErrInvalidProblem", log.Last(t).Err)
+	}
+}

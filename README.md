@@ -161,6 +161,14 @@ The mapper constructors are:
 
 The route's mappers are tried first, then its groups', then `Config.Errors`.
 
+For a one-off answer that no mapper needs to know, return `problem.Error(p)`. The router sends the problem as it is, after checking it is valid, without consulting mappers. `problem.FromError` gets it back, for tests or middleware:
+
+```go
+if stock == 0 {
+	return h.Response[Order]{}, problem.Error(problem.Problem{Status: http.StatusConflict, Title: "Out of stock"})
+}
+```
+
 An error no mapper knows is answered with 500. Its text goes only to `Config.OnError`, never to the client. A panic in an endpoint is answered with 500 and reported as `h.ErrPanic`. An error that wraps the request's own context error is answered by the router, without mappers: 499 when the client has gone, 503 when the request's deadline passed.
 
 A mapper with a fixed problem is checked when it is built. Assert that in the capability's own tests:
