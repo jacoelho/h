@@ -695,3 +695,71 @@ func TestAllowIsSentOnlyWhileTheStatusIs405(t *testing.T) {
 		t.Fatalf("Allow %q on a 404", allow)
 	}
 }
+
+func TestRefusedBodiesWrapTheirCause(t *testing.T) {
+	causes := problem.Map(
+		problem.As(func(*http.MaxBytesError) problem.Problem { return problem.Problem{Status: 413, Title: "over MaxBody"} }),
+		problem.Is(multipart.ErrMessageTooLarge, problem.Problem{Status: 413, Title: "form too large"}),
+		problem.Is(os.ErrDeadlineExceeded, problem.Problem{Status: 408, Title: "too slow"}),
+	)
+	r := newRouter(t, h.Config{RequestErrors: causes, MaxBody: 64 << 10})
+	r.Post("/typed", echo(nil))
+	r.Post("/raw", func(_ context.Context, req h.Request[h.RawBody]) (h.Response[h.Empty], error) {
+		_, err := io.ReadAll(req.Body().Reader())
+		return h.NoContent[h.Empty](), err
+	}, h.Consumes("*/*"))
+	r.Post("/form", func(context.Context, h.Request[h.Form]) (h.Response[h.Empty], error) {
+		return h.NoContent[h.Empty](), nil
+	}, h.MaxBody(1<<20))
+	r.Post("/small-form", func(context.Context, h.Request[h.Form]) (h.Response[h.Empty], error) {
+		return h.NoContent[h.Empty](), nil
+	})
+
+	bigFile, bigFileType := multipartBody(t, nil, map[string]string{"doc": strings.Repeat("x", 64<<10)})
+	var parts strings.Builder
+	form := multipart.NewWriter(&parts)
+	for i := range 1001 {
+		if err := form.WriteField(fmt.Sprint("f", i), "v"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+	oversized := `{"name":"` + strings.Repeat("x", 64<<10) + `"}`
+	for _, c := range []struct {
+		name, target, contentType, body, title string
+		status                                 int
+	}{
+		{"typed body over MaxBody", "/typed", "application/json", oversized, "over MaxBody", 413},
+		{"raw body over MaxBody", "/raw", "application/octet-stream", oversized, "over MaxBody", 413},
+		{"multipart form over MaxBody", "/small-form", bigFileType, bigFile, "over MaxBody", 413},
+		{"multipart form with too many parts", "/form", form.FormDataContentType(), parts.String(), "form too large", 413},
+	} {
+		w := send(t, r, call{method: "POST", target: c.target, body: c.body, header: http.Header{"Content-Type": {c.contentType}}})
+		if p := w.Problem(t); p.Status != c.status || p.Title != c.title {
+			t.Errorf("%s: problem %d %q, want %d %q", c.name, p.Status, p.Title, c.status, c.title)
+		}
+	}
+
+	s := httptest.NewUnstartedServer(handlerOf(t, r))
+	s.Config.ReadTimeout = 300 * time.Millisecond
+	s.Start()
+	t.Cleanup(s.Close)
+	for _, target := range []string{"/typed", "/raw"} {
+		conn, err := net.Dial("tcp", s.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.WriteString(conn, "POST "+target+" HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{\"name\":")
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		resp, err := io.ReadAll(conn)
+		_ = conn.Close()
+		if err != nil {
+			t.Fatalf("slow body to %s: %v", target, err)
+		}
+		if !strings.HasPrefix(string(resp), "HTTP/1.1 408 ") || !strings.Contains(string(resp), `"title":"too slow"`) {
+			t.Errorf("slow body to %s answered %q, want 408 titled \"too slow\"", target, resp)
+		}
+	}
+}
