@@ -538,13 +538,15 @@ func (r *Router) Handle(method, path string, fn func(http.ResponseWriter, *http.
 	})
 }
 
-// Raw adapts a handler that reports no errors for Handle.
-func Raw(h http.Handler) func(http.ResponseWriter, *http.Request) error {
-	if h == nil {
+// Raw adapts a handler function that reports no errors for Handle. Pass an
+// http.Handler as its method value, such as files.ServeHTTP. A nil fn gives
+// nil, which registration reports.
+func Raw(fn func(http.ResponseWriter, *http.Request)) func(http.ResponseWriter, *http.Request) error {
+	if fn == nil {
 		return nil
 	}
 	return func(w http.ResponseWriter, req *http.Request) error {
-		h.ServeHTTP(w, req)
+		fn(w, req)
 		return nil
 	}
 }

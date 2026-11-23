@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/jacoelho/h"
@@ -147,7 +148,7 @@ func TestResponseCannotSetCORSFields(t *testing.T) {
 
 func TestFallbackAllowsEveryRegisteredMethod(t *testing.T) {
 	r := newRouter(t, h.Config{})
-	r.Handle("PROPFIND", "/dav", h.Raw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(207) })))
+	r.Handle("PROPFIND", "/dav", h.Raw(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(207) }))
 	r.Fallback()
 	resp := htest.New(t, r).Do("GET", "/dav", nil).Expect(t, http.StatusMethodNotAllowed)
 	if allow := resp.Header().Get("Allow"); allow != "PROPFIND" {
@@ -325,4 +326,19 @@ func TestNilFunctionsAreSetupErrors(t *testing.T) {
 	r.Get("/b", h.Bind[h.Empty, string, item](nil, func(context.Context, string) (item, error) { return item{}, nil }))
 	wantSetupError(t, r, `GET "/f": nil endpoint`)
 	wantSetupError(t, r, `GET "/b": nil endpoint`)
+}
+
+func TestRawServesAHandlerByMethodValue(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	files := http.FileServerFS(fstest.MapFS{"hello.txt": {Data: []byte("hi")}})
+	r.Handle("GET", "/hello.txt", h.Raw(files.ServeHTTP))
+	if got := htest.New(t, r).Do("GET", "/hello.txt", nil).Expect(t, http.StatusOK).Body.String(); got != "hi" {
+		t.Fatalf("body %q", got)
+	}
+}
+
+func TestRawNilIsASetupError(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Handle("GET", "/nil", h.Raw(nil))
+	wantSetupError(t, r, `GET "/nil"`)
 }

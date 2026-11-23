@@ -63,9 +63,9 @@ func TestFallback(t *testing.T) {
 	api := r.Group("/api")
 	api.Get("/items", respond(h.OK(item{"a"})))
 	api.Fallback()
-	r.Handle("GET", "/other", h.Raw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	r.Handle("GET", "/other", h.Raw(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "other")
-	})))
+	}))
 
 	w := send(t, r, call{method: "GET", target: "/api/nope"})
 	w.Expect(t, http.StatusNotFound)

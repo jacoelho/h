@@ -236,7 +236,16 @@ r.Handle("GET", "/static/{file...}", func(w http.ResponseWriter, req *http.Reque
 })
 ```
 
-`http.FileServer` does not fit here unwrapped: it looks up the whole request path, base path included. Wrap it in `http.StripPrefix` with the mounted prefix if you need it.
+`h.Raw` adapts a handler that returns no error, either a plain function or an `http.Handler` passed as its method value:
+
+```go
+r.Handle("GET", "/healthz", h.Raw(func(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}))
+r.Handle("PROPFIND", "/dav/{path...}", h.Raw(davHandler.ServeHTTP))
+```
+
+`http.FileServer` looks up the whole request path, base path included, so wrap it in `http.StripPrefix` with the mounted prefix before passing it.
 
 ## Set limits and media types
 
