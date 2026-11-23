@@ -211,9 +211,13 @@ func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) error {
 		_ = http.NewResponseController(&x.tw).EnableFullDuplex()
 	}
 	ct := req.Header.Get("Content-Type")
+	match := ct
+	if match == "" {
+		match = "application/octet-stream" // RFC 9110, section 8.3
+	}
 	switch a.in {
 	case inForm:
-		if !a.route.Consumes(ct) {
+		if !a.route.Consumes(match) {
 			return &RequestError{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
 		}
 		f, cleanup, err := parseForm(&x.st, &x.body, a.res.maxMemory)
@@ -224,13 +228,13 @@ func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) error {
 		c.in = any(f).(In)
 		return nil
 	case inRaw:
-		if !a.route.Consumes(ct) {
+		if !a.route.Consumes(match) {
 			return &RequestError{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
 		}
 		c.in = any(RawBody{contentType: ct, r: &x.body}).(In)
 		return nil
 	}
-	dec, err := a.route.Decoder(ct)
+	dec, err := a.route.Decoder(match)
 	if err != nil {
 		return &RequestError{Status: http.StatusUnsupportedMediaType, Err: err}
 	}

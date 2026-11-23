@@ -153,7 +153,7 @@ func TestStream(t *testing.T) {
 
 func ndjsonCodecs(t *testing.T) *codec.Set {
 	t.Helper()
-	s := codec.Default()
+	s := codec.Default(codec.JSON{})
 	if err := s.Encodes(codec.NDJSON{}, "application/x-ndjson"); err != nil {
 		t.Fatal(err)
 	}

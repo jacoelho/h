@@ -176,7 +176,7 @@ func TestSequencesDecode(t *testing.T) {
 }
 
 func TestSetForNarrowsByTypeAndRanges(t *testing.T) {
-	s := codec.Default()
+	s := codec.Default(codec.JSON{})
 	if err := s.Encodes(codec.NDJSON{}, "application/x-ndjson"); err != nil {
 		t.Fatal(err)
 	}

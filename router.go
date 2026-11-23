@@ -35,7 +35,8 @@ type Config struct {
 	// Mapper knows none.
 	Errors problem.Mapper
 	// Codecs are the codecs routes negotiate between; nil means
-	// codec.Default().
+	// codec.Default(codec.JSON{}). Use codec.Default(codec.JSON{
+	// RejectUnknownFields: true}) to refuse unknown object members.
 	Codecs *codec.Set
 	// ProblemFormats are the formats problems are written in; nil means
 	// problem.RFC9457. problem.Text is always the last resort.
@@ -116,7 +117,7 @@ func New(cfg Config) (*Router, error) {
 		return nil, fmt.Errorf("h: Config.Errors: %w", err)
 	}
 	if cfg.Codecs == nil {
-		cfg.Codecs = codec.Default()
+		cfg.Codecs = codec.Default(codec.JSON{})
 	}
 	if cfg.ProblemFormats == nil {
 		cfg.ProblemFormats = []problem.Format{problem.RFC9457}
@@ -552,13 +553,20 @@ func Raw(fn func(http.ResponseWriter, *http.Request)) func(http.ResponseWriter, 
 }
 
 var (
-	errNoRoute          = errors.New("h: no route")
-	errMethodNotAllowed = errors.New("h: method not allowed")
+	// ErrNoRoute is the cause of the 404 that Fallback answers for a path
+	// no route matches. Mappers can match it to describe that problem.
+	ErrNoRoute = errors.New("h: no route")
+	// ErrMethodNotAllowed is the cause of the 405 that Fallback answers for
+	// a path whose routes serve other methods. Mappers can match it to
+	// describe that problem.
+	ErrMethodNotAllowed = errors.New("h: method not allowed")
 )
 
 // Fallback answers every request under the router's prefix that no route
 // matches: 405 with Allow when the path has routes for other methods,
-// otherwise 404, both as problems.
+// otherwise 404, both as problems caused by ErrMethodNotAllowed and
+// ErrNoRoute. Without Fallback, such requests get net/http's plain-text
+// answers.
 func (r *Router) Fallback() {
 	c := r.core
 	if !r.mutable("Fallback registered") {
@@ -568,7 +576,7 @@ func (r *Router) Fallback() {
 		build: func(res resolved, _ string) (http.Handler, error) {
 			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				if methods := c.allowed(req); len(methods) > 0 {
-					p, report := res.resolver.resolve(req, &RequestError{Status: http.StatusMethodNotAllowed, Err: errMethodNotAllowed})
+					p, report := res.resolver.resolve(req, &RequestError{Status: http.StatusMethodNotAllowed, Err: ErrMethodNotAllowed})
 					p.Header = p.Header.Clone()
 					if p.Header == nil {
 						p.Header = http.Header{}
@@ -578,7 +586,7 @@ func (r *Router) Fallback() {
 					res.resolver.write(w, req, p)
 					return
 				}
-				res.resolver.fail(w, req, &RequestError{Status: http.StatusNotFound, Err: errNoRoute})
+				res.resolver.fail(w, req, &RequestError{Status: http.StatusNotFound, Err: ErrNoRoute})
 			}), nil
 		}})
 }

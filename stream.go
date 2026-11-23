@@ -111,7 +111,9 @@ type RawBody struct {
 	r           io.Reader
 }
 
-// ContentType returns the request's Content-Type.
+// ContentType returns the request's Content-Type, empty when the client
+// sent none. The route's Consumes matches such a body as
+// application/octet-stream.
 func (b RawBody) ContentType() string { return b.contentType }
 
 // Reader returns the request body. The zero RawBody reads as empty.

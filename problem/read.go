@@ -10,7 +10,8 @@ import (
 // Read decodes an RFC 9457 problem details JSON object: the standard
 // members into their fields, every other member into Extra. It reports an
 // error, wrapping ErrInvalid, when the input is not a JSON object or its
-// status is missing, null or not an integer.
+// status is present but null or not an integer. A missing status leaves
+// Status zero: RFC 9457, section 3.1.2, makes the member advisory.
 //
 // Read returns what the body says, not what RFC9457 would write: it does
 // not apply Validate, Extra holds JSON numbers as float64, and the
@@ -22,15 +23,13 @@ func Read(r io.Reader) (Problem, error) {
 		return Problem{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	var p Problem
-	statusRaw, ok := members["status"]
-	if !ok {
-		return Problem{}, fmt.Errorf("%w: no status member", ErrInvalid)
-	}
-	if statusRaw.Kind() != '0' {
-		return Problem{}, fmt.Errorf("%w: status is not a number", ErrInvalid)
-	}
-	if err := json.Unmarshal(statusRaw, &p.Status); err != nil {
-		return Problem{}, fmt.Errorf("%w: status: %w", ErrInvalid, err)
+	if statusRaw, ok := members["status"]; ok {
+		if statusRaw.Kind() != '0' {
+			return Problem{}, fmt.Errorf("%w: status is not a number", ErrInvalid)
+		}
+		if err := json.Unmarshal(statusRaw, &p.Status); err != nil {
+			return Problem{}, fmt.Errorf("%w: status: %w", ErrInvalid, err)
+		}
 	}
 	for name, dst := range map[string]*string{"type": &p.Type, "title": &p.Title, "detail": &p.Detail} {
 		if raw, ok := members[name]; ok {

@@ -196,10 +196,17 @@ func TestReadRoundTripsRFC9457(t *testing.T) {
 }
 
 func TestReadRefusesNonProblems(t *testing.T) {
-	for _, body := range []string{``, `[]`, `{"title":"x"}`, `{"status":"404"}`, `{"status":404,"title":7}`} {
+	for _, body := range []string{``, `[]`, `{"status":"404"}`, `{"status":404,"title":7}`} {
 		if _, err := problem.Read(strings.NewReader(body)); !errors.Is(err, problem.ErrInvalid) {
 			t.Fatalf("Read(%q) = %v, want ErrInvalid", body, err)
 		}
+	}
+}
+
+func TestReadAcceptsMissingStatus(t *testing.T) {
+	p, err := problem.Read(strings.NewReader(`{"title":"Out of credit"}`))
+	if err != nil || p.Status != 0 || p.Title != "Out of credit" {
+		t.Fatalf("Read = %+v, %v; want title kept and status 0", p, err)
 	}
 }
 

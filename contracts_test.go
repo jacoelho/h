@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jacoelho/h"
+	"github.com/jacoelho/h/codec"
 	"github.com/jacoelho/h/htest"
 	"github.com/jacoelho/h/mw"
 	"github.com/jacoelho/h/problem"
@@ -341,4 +342,91 @@ func TestRawNilIsASetupError(t *testing.T) {
 	r := newRouter(t, h.Config{})
 	r.Handle("GET", "/nil", h.Raw(nil))
 	wantSetupError(t, r, `GET "/nil"`)
+}
+
+func TestBodyLimitIsNotOfferedToMalformedInputMappers(t *testing.T) {
+	var log htest.Errors
+	var offered []error
+	r := newRouter(t, h.Config{OnError: log.OnError, Errors: problem.As(func(e *codec.DecodeError) problem.Problem {
+		offered = append(offered, e)
+		return problem.Problem{Status: http.StatusBadRequest, Title: "Malformed JSON"}
+	})})
+	r.Post("/one", h.Func(func(_ context.Context, in item) (item, error) { return in, nil }), h.MaxBody(8))
+	r.Post("/many", func(_ context.Context, req h.Request[h.Seq[item]]) (h.Response[h.Empty], error) {
+		for _, err := range req.Body().All() {
+			if err != nil {
+				return h.Response[h.Empty]{}, err
+			}
+		}
+		return h.NoContent[h.Empty](), nil
+	}, h.MaxBody(8))
+	r.Post("/raw", func(_ context.Context, req h.Request[h.RawBody]) (h.Response[h.Empty], error) {
+		var in item
+		return h.NoContent[h.Empty](), codec.JSON{}.Decode(req.Body().Reader(), &in)
+	}, h.Consumes("application/json"), h.MaxBody(8))
+	c := htest.New(t, r)
+	for path, body := range map[string]string{"/one": `{"name":"a long name"}`, "/many": `[{"name":"a long name"}]`, "/raw": `{"name":"a long name"}`} {
+		c.Do("POST", path, body, htest.Header("Content-Type", "application/json")).Expect(t, http.StatusRequestEntityTooLarge)
+		if err := log.Last(t).Err; errors.Is(err, h.ErrInvalidProblem) {
+			t.Fatalf("POST %s: OnError got %v", path, err)
+		}
+	}
+	if len(offered) != 0 {
+		t.Fatalf("malformed-input mapper offered %v", offered)
+	}
+}
+
+func TestFallbackProblemsCarryTitleAndMatchableCause(t *testing.T) {
+	var log htest.Errors
+	shape := problem.JSON("application/json", func(p problem.Problem) any {
+		return map[string]any{"message": p.Title}
+	})
+	r := newRouter(t, h.Config{
+		OnError:        log.OnError,
+		ProblemFormats: []problem.Format{shape},
+		Errors:         problem.Is(h.ErrNoRoute, problem.Problem{Status: http.StatusNotFound, Title: "No such page"}),
+	})
+	r.Get("/x", respond(h.OK(item{"a"})))
+	r.Fallback()
+	c := htest.New(t, r)
+
+	if got := c.Do("GET", "/nope", nil, htest.Header("Accept", "application/json")).Expect(t, http.StatusNotFound).Body.String(); got != `{"message":"No such page"}` {
+		t.Fatalf("404 body %s", got)
+	}
+	if got := c.Do("POST", "/x", nil, htest.Header("Accept", "application/json")).Expect(t, http.StatusMethodNotAllowed).Body.String(); got != `{"message":"Method Not Allowed"}` {
+		t.Fatalf("405 body %s", got)
+	}
+	if last := log.Last(t); !errors.Is(last.Err, h.ErrMethodNotAllowed) || last.Problem.Title != "Method Not Allowed" {
+		t.Fatalf("OnError got %v, %+v", last.Err, last.Problem)
+	}
+}
+
+func TestBodyWithoutContentTypeIsOctetStream(t *testing.T) {
+	var got []string
+	r := newRouter(t, h.Config{})
+	r.Post("/any", func(_ context.Context, req h.Request[h.RawBody]) (h.Response[h.Empty], error) {
+		data, err := io.ReadAll(req.Body().Reader())
+		got = append(got, req.Body().ContentType()+":"+string(data))
+		return h.NoContent[h.Empty](), err
+	}, h.Consumes("*/*"))
+	r.Post("/octets", func(_ context.Context, req h.Request[h.RawBody]) (h.Response[h.Empty], error) {
+		return h.NoContent[h.Empty](), nil
+	}, h.Consumes("application/octet-stream"))
+	r.Post("/json", h.Func(func(_ context.Context, in item) (item, error) { return in, nil }))
+	c := htest.New(t, r)
+
+	c.Do("POST", "/any", "abc").Expect(t, http.StatusNoContent)
+	c.Do("POST", "/octets", "abc").Expect(t, http.StatusNoContent)
+	c.Do("POST", "/json", `{"name":"a"}`).Expect(t, http.StatusUnsupportedMediaType)
+	if !slices.Equal(got, []string{":abc"}) {
+		t.Fatalf("endpoint saw %q, want the empty Content-Type kept", got)
+	}
+}
+
+func TestDefaultCodecsCanRejectUnknownMembers(t *testing.T) {
+	r := newRouter(t, h.Config{Codecs: codec.Default(codec.JSON{RejectUnknownFields: true})})
+	r.Post("/x", h.Func(func(_ context.Context, in item) (item, error) { return in, nil }))
+	c := htest.New(t, r)
+	c.Do("POST", "/x", `{"nmae":"a"}`, htest.Header("Content-Type", "application/json")).Expect(t, http.StatusBadRequest)
+	c.Do("POST", "/x", `{"name":"a"}`, htest.Header("Content-Type", "application/vnd.api+json")).Expect(t, http.StatusOK)
 }
