@@ -52,6 +52,11 @@ var (
 // status; they are offered the RequestError and what it wraps, while errors
 // wrapped around it, by a decoder or an endpoint, are reported to OnError
 // but not matched. Errors mappers are never offered it.
+//
+// When the router refuses a body it reads, a 413 wraps *http.MaxBytesError,
+// or multipart.ErrMessageTooLarge for a multipart form too large to parse,
+// and a 408 wraps os.ErrDeadlineExceeded. Any other read failure is a 400
+// wrapping the server's error, told apart only by Status.
 type RequestError struct {
 	Status int
 	Err    error
