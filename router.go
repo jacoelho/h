@@ -190,16 +190,16 @@ func (c *core) fail(format string, args ...any) {
 }
 
 // Group returns a router for the routes under prefix, such as "/orders",
-// with opts applied to all of them. A prefix may hold wildcards. An invalid
-// prefix or option is reported by Handler, and the group's routes are not
-// registered.
+// with opts applied to all of them. A prefix may hold wildcards. An empty
+// prefix gives a group that only applies opts. An invalid prefix or option
+// is reported by Handler, and the group's routes are not registered.
 func (r *Router) Group(prefix string, opts ...Option) *Router {
 	g := &Router{core: r.core, parent: r, prefix: r.prefix + prefix, broken: true}
 	if !r.mutable(fmt.Sprintf("Group %q created", g.prefix)) {
 		return g
 	}
-	if !strings.HasPrefix(prefix, "/") || strings.HasSuffix(prefix, "/") || path.Clean(prefix) != prefix {
-		r.core.fail("group prefix %q must start with /, not end with /, and be clean", prefix)
+	if prefix != "" && (!strings.HasPrefix(prefix, "/") || strings.HasSuffix(prefix, "/") || path.Clean(prefix) != prefix) {
+		r.core.fail("group prefix %q must be empty, or start with /, not end with /, and be clean", prefix)
 		return g
 	}
 	l, err := levelOf(opts, false)
