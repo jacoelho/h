@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -761,5 +762,70 @@ func TestRefusedBodiesWrapTheirCause(t *testing.T) {
 		if !strings.HasPrefix(string(resp), "HTTP/1.1 408 ") || !strings.Contains(string(resp), `"title":"too slow"`) {
 			t.Errorf("slow body to %s answered %q, want 408 titled \"too slow\"", target, resp)
 		}
+	}
+}
+
+func TestParserProblemAnswersAFailedParameter(t *testing.T) {
+	noSuchOrder := problem.Problem{Status: http.StatusNotFound, Title: "Not Found", Detail: "No such order."}
+	parseOrder := func(s string) (OrderID, error) {
+		if !strings.HasPrefix(s, "o-") {
+			return "", problem.Error(noSuchOrder)
+		}
+		return OrderID(s), nil
+	}
+	r := newRouter(t, h.Config{})
+	r.Get("/orders/{id}", h.Bind(func(p *h.Params, _ h.Empty) OrderID { return p.Path("id", parseOrder) },
+		func(_ context.Context, id OrderID) (Order, error) { return Order{ID: id}, nil }))
+	p := htest.New(t, r).Do("GET", "/orders/42", nil).Expect(t, http.StatusNotFound).Problem(t)
+	if p.Detail != "No such order." {
+		t.Fatalf("problem %+v, want the parser's", p)
+	}
+}
+
+func TestFirstFailedParameterWithAProblemWins(t *testing.T) {
+	carrying := func(title string) func(string) (int64, error) {
+		return func(string) (int64, error) {
+			return 0, problem.Error(problem.Problem{Status: http.StatusUnprocessableEntity, Title: title})
+		}
+	}
+	r := newRouter(t, h.Config{})
+	r.Get("/x", func(_ context.Context, req h.Request[h.Empty]) (h.Response[h.Empty], error) {
+		return h.Response[h.Empty]{}, req.Parse(func(p *h.Params) {
+			p.Query("plain", h.Int64)
+			p.Query("first", carrying("first"))
+			p.Query("second", carrying("second"))
+		})
+	})
+	p := htest.New(t, r).Do("GET", "/x?plain=a&second=b&first=c", nil).Expect(t, http.StatusUnprocessableEntity).Problem(t)
+	if p.Title != "first" {
+		t.Fatalf("problem %+v, want the one from the first parameter asked for", p)
+	}
+}
+
+func TestParserProblemOutside4xxKeepsTheParameterRefusal(t *testing.T) {
+	var log htest.Errors
+	r := newRouter(t, h.Config{OnError: log.OnError})
+	r.Get("/x", h.Bind(func(p *h.Params, _ h.Empty) int64 {
+		return p.Query("n", func(string) (int64, error) {
+			return 0, problem.Error(problem.Problem{Status: http.StatusServiceUnavailable})
+		})
+	}, func(context.Context, int64) (h.Empty, error) { return h.Empty{}, nil }))
+	p := htest.New(t, r).Do("GET", "/x?n=1", nil).Expect(t, http.StatusBadRequest).Problem(t)
+	if p.Extra["invalid_params"] == nil {
+		t.Fatalf("problem %+v, want the parameter list", p)
+	}
+	if !errors.Is(log.Last(t).Err, h.ErrInvalidProblem) {
+		t.Fatalf("OnError got %v, want ErrInvalidProblem", log.Last(t).Err)
+	}
+}
+
+func TestRequestErrorsMapperSeesTheParserError(t *testing.T) {
+	r := newRouter(t, h.Config{RequestErrors: problem.As(func(*strconv.NumError) problem.Problem {
+		return problem.Problem{Status: http.StatusBadRequest, Title: "Not a number"}
+	})})
+	r.Get("/x", h.Bind(func(p *h.Params, _ h.Empty) int64 { return p.Query("n", h.Int64) },
+		func(context.Context, int64) (h.Empty, error) { return h.Empty{}, nil }))
+	if p := htest.New(t, r).Do("GET", "/x?n=abc", nil).Expect(t, http.StatusBadRequest).Problem(t); p.Title != "Not a number" {
+		t.Fatalf("problem %+v, want the mapper's", p)
 	}
 }

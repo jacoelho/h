@@ -48,7 +48,8 @@ func (r Request[In]) Body() In { return r.body }
 // Parse reads path, query and header values through f and returns nil, or a
 // *ParamsError listing every value that was missing or did not parse, in
 // the order f asked for them. The router answers that error with 400, or
-// 404 when a path value failed. The Params is valid only inside f.
+// 404 when a path value failed, unless a parser's error carries a problem;
+// see ParamsError. The Params is valid only inside f.
 func (r Request[In]) Parse(f func(*Params)) error {
 	p := &Params{st: stateOf(r.st)}
 	f(p)
