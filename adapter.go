@@ -203,10 +203,11 @@ func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) error {
 	}
 	x := &c.exchange
 	if a.duplex {
-		// An HTTP/1 server closes an unread request body once the response
-		// starts, cutting off a body the endpoint reads while it writes.
-		// HTTP/2 is full duplex already and reports ErrNotSupported, as do
-		// writers that are not connections; both are fine to ignore.
+		// Without full duplex, an HTTP/1 server consumes the unread request
+		// body before writing the response (net/http documentation of
+		// ResponseController.EnableFullDuplex). Writers that cannot enable
+		// it report ErrNotSupported, which needs no handling: HTTP/2 is
+		// full duplex already.
 		_ = http.NewResponseController(&x.tw).EnableFullDuplex()
 	}
 	ct := req.Header.Get("Content-Type")
