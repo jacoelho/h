@@ -42,9 +42,14 @@ func Errors(m problem.Mapper) Option {
 }
 
 // ProblemFormats sets the formats problems are written in, negotiated by
-// Accept in the order given. Text is always the last resort.
+// Accept in the order given. The last one answers an Accept that matches
+// none, so list problem.Text last to keep a plain-text answer for such
+// clients.
 func ProblemFormats(fs ...problem.Format) Option {
 	return Option{apply: func(l *level) error {
+		if len(fs) == 0 {
+			return errors.New("ProblemFormats with no formats")
+		}
 		if slices.Contains(fs, nil) {
 			return errors.New("ProblemFormats with a nil format")
 		}

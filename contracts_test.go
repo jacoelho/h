@@ -430,3 +430,34 @@ func TestDefaultCodecsCanRejectUnknownMembers(t *testing.T) {
 	c.Do("POST", "/x", `{"nmae":"a"}`, htest.Header("Content-Type", "application/json")).Expect(t, http.StatusBadRequest)
 	c.Do("POST", "/x", `{"name":"a"}`, htest.Header("Content-Type", "application/vnd.api+json")).Expect(t, http.StatusOK)
 }
+
+func TestLastProblemFormatAnswersUnmatchedAccept(t *testing.T) {
+	fails := failing(errors.New("boom"))
+	jsonOnly := newRouter(t, h.Config{ProblemFormats: []problem.Format{problem.RFC9457}})
+	jsonOnly.Get("/x", fails)
+	defaults := newRouter(t, h.Config{})
+	defaults.Get("/x", fails)
+
+	for _, tc := range []struct {
+		name string
+		r    *h.Router
+		want string
+	}{
+		{"listed formats only", jsonOnly, "application/problem+json"},
+		{"default keeps text last", defaults, "text/plain; charset=utf-8"},
+	} {
+		resp := htest.New(t, tc.r).Do("GET", "/x", nil, htest.Header("Accept", "application/xml"))
+		if ct := resp.Header().Get("Content-Type"); resp.Code != http.StatusNotAcceptable || ct != tc.want {
+			t.Fatalf("%s: %d %s, want 406 %s", tc.name, resp.Code, ct, tc.want)
+		}
+	}
+}
+
+func TestEmptyProblemFormatsAreRefused(t *testing.T) {
+	if _, err := h.New(h.Config{ProblemFormats: []problem.Format{}}); err == nil {
+		t.Fatal("New accepted an empty ProblemFormats")
+	}
+	r := newRouter(t, h.Config{})
+	r.Get("/x", respond(h.OK(item{"a"})), h.ProblemFormats())
+	wantSetupError(t, r, "ProblemFormats with no formats")
+}
