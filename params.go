@@ -21,6 +21,9 @@ type Params struct {
 }
 
 // ParamsError lists the parameters a request lacked or that did not parse.
+// It wraps each parameter's Err in order. A parser may return
+// problem.Error(p) to answer with p in place of the router's 400 or 404;
+// the first parameter carrying one wins, and p must have a 4xx status.
 type ParamsError struct {
 	Params []ParamError
 }
@@ -41,6 +44,15 @@ func (e *ParamsError) Error() string {
 		parts[i] = fmt.Sprintf("%s %s: %v", p.In, p.Name, p.Err)
 	}
 	return "h: invalid parameters: " + strings.Join(parts, "; ")
+}
+
+// Unwrap returns each parameter's Err, in the order they were asked for.
+func (e *ParamsError) Unwrap() []error {
+	errs := make([]error, len(e.Params))
+	for i, p := range e.Params {
+		errs[i] = p.Err
+	}
+	return errs
 }
 
 func (e *ParamsError) problem() problem.Problem {
