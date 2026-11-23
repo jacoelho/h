@@ -135,6 +135,27 @@ The router answers that error with a 400 problem that lists each value under `in
 
 A parser is any `func(string) (T, error)`. The package provides `h.String`, `h.Int64`, `h.Time(layout)` and `h.OneOf(values...)`.
 
+An empty value, as in `?after=`, is present and passed to the parser, so the parser decides what it means. An HTML form submitted with GET sends its blank fields this way. To read an empty value as absent, wrap the parser:
+
+```go
+func optional[T any](parse func(string) (T, error)) func(string) (*T, error) {
+	return func(s string) (*T, error) {
+		if s == "" {
+			return nil, nil
+		}
+		v, err := parse(s)
+		if err != nil {
+			return nil, err
+		}
+		return &v, nil
+	}
+}
+
+after := p.QueryOr("after", nil, optional(h.Time(time.RFC3339))) // nil when absent or empty
+```
+
+Use the wrapper with `QueryOr`, `HeaderOr` or `ValueOr` and a nil default. With `Query`, a required value that is empty would pass as nil, and with `QueryOpt`, an empty value would be reported as present.
+
 ## Translate errors into problems
 
 Give each business capability one `problem.Mapper` and attach it to that capability's group:
