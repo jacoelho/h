@@ -25,6 +25,7 @@ type headerField struct{ key, value string }
 func OK[T any](v T) Response[T] { return Response[T]{status: http.StatusOK, body: v} }
 
 // Created answers 201 with v and a Location field naming the new resource.
+// For a 201 without Location, use Status(http.StatusCreated, v).
 func Created[T any](location string, v T) Response[T] {
 	return Response[T]{status: http.StatusCreated, body: v}.WithHeader("Location", location)
 }
