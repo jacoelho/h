@@ -344,7 +344,7 @@ The router never answers with `Access-Control-Allow-Origin: *` and never names a
 
 To exempt one route that other sites must reach, such as a single sign-on callback, pass `h.InsecureAllowCrossOrigin()` to that route. Passing it to a group is a setup mistake.
 
-## Add middleware and observe errors
+## Add middleware, request data and logging
 
 `r.Use` on the root router wraps every request, including unmatched ones. On a group, it wraps that group's routes. Package `mw` provides `RequestID`, `AccessLog` and `Timeout`:
 
@@ -352,11 +352,24 @@ To exempt one route that other sites must reach, such as a single sign-on callba
 r.Use(mw.RequestID("X-Request-Id"), mw.AccessLog(logger), mw.Timeout(10*time.Second))
 ```
 
-`Config.OnError` receives every error the router answers, with the problem it became. An error found after the response was sent, such as failing to remove multipart temporary files, arrives with the zero `Problem`. Log there:
+Every problem the router answers is described by an `h.Failure`: the `Request`, the `Err` that caused it, and the `Problem` the client is sent. Two hooks receive it.
+
+`Config.Annotate` adds request data to every problem, including the ones the router raises itself, such as a 404 or a malformed body. It runs after the mappers, so they stay functions of the error alone. It must keep the status. `Problem.With` adds a member without changing a map another problem shares:
 
 ```go
-OnError: func(ctx context.Context, req *http.Request, err error, p problem.Problem) {
-	logger.ErrorContext(ctx, "request failed", "status", p.Status, "err", err)
+Annotate: func(f h.Failure) problem.Problem {
+	if id, ok := mw.RequestIDFrom(f.Request.Context()); ok {
+		return f.Problem.With("request_id", id)
+	}
+	return f.Problem
+},
+```
+
+`Config.OnError` observes every failure and gets its own copy of the problem. An error found after the response was sent, such as failing to remove multipart temporary files, arrives with the zero `Problem`. Log there:
+
+```go
+OnError: func(f h.Failure) {
+	logger.ErrorContext(f.Request.Context(), "request failed", "status", f.Problem.Status, "err", f.Err)
 },
 ```
 
@@ -422,7 +435,7 @@ func TestCreateOrder(t *testing.T) {
 }
 ```
 
-`Do` sends a struct as JSON, and a string, `[]byte` or `io.Reader` as is. `Response.JSON[T]` decodes strictly. `Response.Problem` fails unless the body is an `application/problem+json` problem. For a custom problem format, decode the body with `Response.JSON[T]` and your error type. `htest.Errors` records `OnError` calls. When the router aborts a response that failed after it started, `Response.Aborted` is set. Use `Send` for a request you built yourself, and `httptest.NewServer` when you need a real connection.
+`Do` sends a struct as JSON, and a string, `[]byte` or `io.Reader` as is. `Response.JSON[T]` decodes strictly. `Response.Problem` fails unless the body is an `application/problem+json` problem. For a custom problem format, decode the body with `Response.JSON[T]` and your error type. `htest.Errors` records each `h.Failure` passed to `OnError`. When the router aborts a response that failed after it started, `Response.Aborted` is set. Use `Send` for a request you built yourself, and `httptest.NewServer` when you need a real connection.
 
 To call an endpoint without a router, build its request with `h.NewRequest`, `h.NewFormRequest` or `h.NewRawBody`. Run a `Stream` with `Stream.WriteTo`.
 

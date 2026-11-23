@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -13,13 +14,18 @@ import (
 	"github.com/jacoelho/h/problem"
 )
 
-// OnError observes every error a route answers with: the error and the
-// problem it became. An error found after the response was sent, such as
-// failing to remove multipart temporary files, comes with the zero Problem. It runs before the problem is written and must not
-// write to the response or panic: a panic is not recovered, since OnError is
-// where it would be reported, and reaches the http.Server, which logs it
-// and closes the connection.
-type OnError func(ctx context.Context, r *http.Request, err error, p problem.Problem)
+// Failure is a request the router answers with a problem, as Config.Annotate
+// and Config.OnError receive it.
+type Failure struct {
+	// Request is the request that failed. Its context may already be done.
+	Request *http.Request
+	// Err is what went wrong, for logs. It is never sent to the client.
+	Err error
+	// Problem is what the client is sent. It is the zero Problem for an
+	// error found after the response was sent, such as failing to remove
+	// multipart temporary files.
+	Problem problem.Problem
+}
 
 const statusClientClosedRequest = 499
 
@@ -35,12 +41,13 @@ type mapping struct {
 // the formats to write problems in, and the observer.
 type resolver struct {
 	mapping
-	formats []problem.Format
-	offers  []media.Type
-	onError OnError
+	formats  []problem.Format
+	offers   []media.Type
+	annotate func(Failure) problem.Problem
+	onError  func(Failure)
 }
 
-func newResolver(m mapping, formats []problem.Format, onError OnError) (*resolver, error) {
+func newResolver(m mapping, formats []problem.Format, annotate func(Failure) problem.Problem, onError func(Failure)) (*resolver, error) {
 	if len(formats) == 0 {
 		return nil, errors.New("h: no problem formats")
 	}
@@ -56,7 +63,7 @@ func newResolver(m mapping, formats []problem.Format, onError OnError) (*resolve
 		}
 		offers[i] = t
 	}
-	return &resolver{mapping: m, formats: fs, offers: offers, onError: onError}, nil
+	return &resolver{mapping: m, formats: fs, offers: offers, annotate: annotate, onError: onError}, nil
 }
 
 // mapped asks mappers in order. A mapper that panics answers nothing, and
@@ -77,12 +84,42 @@ func mapped(mappers []problem.Mapper, err error) (p problem.Problem, ok bool, pe
 
 // resolve returns the problem for err and the error to report, which adds
 // ErrInvalidProblem when a mapper's answer was discarded. A problem of type
-// about:blank without a title gets the status's reason phrase, so formats
-// and OnError see the title the client reads.
+// about:blank without a title gets the status's reason phrase, so Annotate,
+// formats and OnError see the title the client reads.
 func (rs *resolver) resolve(req *http.Request, err error) (problem.Problem, error) {
 	p, report := rs.classify(req, err)
 	p.Title = p.TitleOrStatus()
-	return p, report
+	return rs.annotated(req, report, p)
+}
+
+// annotated lets Config.Annotate add request data to p. An answer that
+// changes the status or is invalid, or a panic, is reported and p stands.
+func (rs *resolver) annotated(req *http.Request, report error, p problem.Problem) (q problem.Problem, _ error) {
+	if rs.annotate == nil {
+		return p, report
+	}
+	defer func() {
+		if v := recover(); v != nil {
+			q, report = p, errors.Join(report, panicError(v))
+		}
+	}()
+	q = rs.annotate(Failure{Request: req, Err: report, Problem: clone(p)})
+	switch {
+	case q.Status != p.Status:
+		return p, errors.Join(report, fmt.Errorf("%w: Annotate changed status %d to %d", ErrInvalidProblem, p.Status, q.Status))
+	case q.Validate() != nil && p.Validate() == nil:
+		return p, errors.Join(report, fmt.Errorf("%w: Annotate: %w", ErrInvalidProblem, q.Validate()))
+	}
+	q.Title = q.TitleOrStatus()
+	return q, report
+}
+
+// clone copies p's header and extension maps, so a hook that changes them
+// cannot change another holder's problem.
+func clone(p problem.Problem) problem.Problem {
+	p.Header = p.Header.Clone()
+	p.Extra = maps.Clone(p.Extra)
+	return p
 }
 
 func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, error) {
@@ -168,7 +205,7 @@ func (rs *resolver) fail(w http.ResponseWriter, req *http.Request, err error) {
 
 func (rs *resolver) observe(req *http.Request, err error, p problem.Problem) {
 	if rs.onError != nil {
-		rs.onError(req.Context(), req, err, p)
+		rs.onError(Failure{Request: req, Err: err, Problem: clone(p)})
 	}
 }
 

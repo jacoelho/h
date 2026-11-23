@@ -5,7 +5,6 @@ package htest
 
 import (
 	"bytes"
-	"context"
 	json "encoding/json/v2"
 	"io"
 	"net/http"
@@ -145,35 +144,29 @@ func (r *Response) JSON[T any](t testing.TB) T {
 	return v
 }
 
-// Observed is one OnError call.
-type Observed struct {
-	Err     error
-	Problem problem.Problem
-}
-
 // Errors records OnError calls. Pass its OnError method as h.Config.OnError.
 // It is safe for concurrent use.
 type Errors struct {
 	mu   sync.Mutex
-	seen []Observed
+	seen []h.Failure
 }
 
-// OnError records err and p.
-func (e *Errors) OnError(_ context.Context, _ *http.Request, err error, p problem.Problem) {
+// OnError records f.
+func (e *Errors) OnError(f h.Failure) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.seen = append(e.seen, Observed{Err: err, Problem: p})
+	e.seen = append(e.seen, f)
 }
 
-// All returns the calls recorded so far, oldest first.
-func (e *Errors) All() []Observed {
+// All returns the failures recorded so far, oldest first.
+func (e *Errors) All() []h.Failure {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return append([]Observed(nil), e.seen...)
+	return append([]h.Failure(nil), e.seen...)
 }
 
-// Last returns the latest call, failing t when there was none.
-func (e *Errors) Last(t testing.TB) Observed {
+// Last returns the latest failure, failing t when there was none.
+func (e *Errors) Last(t testing.TB) h.Failure {
 	t.Helper()
 	e.mu.Lock()
 	defer e.mu.Unlock()

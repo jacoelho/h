@@ -183,7 +183,7 @@ func TestNotModifiedCarriesVaryWhenNegotiated(t *testing.T) {
 
 func TestPanickingOnErrorIsCalledOnce(t *testing.T) {
 	var calls atomic.Int32
-	r := newRouter(t, h.Config{OnError: func(context.Context, *http.Request, error, problem.Problem) {
+	r := newRouter(t, h.Config{OnError: func(h.Failure) {
 		calls.Add(1)
 		panic("observer broke")
 	}})
@@ -555,5 +555,68 @@ func TestGroupRequestErrorsTurnAFieldErrorInsideABadBodyInto422(t *testing.T) {
 	p := htest.New(t, r).Do("POST", "/recipes/new", `{"servings":2}`, htest.Header("Content-Type", "application/json")).Expect(t, http.StatusUnprocessableEntity).Problem(t)
 	if p.Extra["field"] != "servings" {
 		t.Fatalf("problem %+v", p)
+	}
+}
+
+func TestAnnotateReachesEveryProblem(t *testing.T) {
+	r := newRouter(t, h.Config{
+		TrustedOrigins: []string{"https://app.example.com"},
+		Annotate: func(f h.Failure) problem.Problem {
+			id, _ := mw.RequestIDFrom(f.Request.Context())
+			return f.Problem.With("request_id", id)
+		},
+	})
+	r.Use(mw.RequestID("X-Request-Id"))
+	r.Get("/fails", failing(errors.New("boom")))
+	r.Get("/panics", func(context.Context, h.Request[h.Empty]) (h.Response[item], error) { panic("broke") })
+	r.Post("/items", echo(nil))
+	r.Handle("GET", "/raw", func(http.ResponseWriter, *http.Request) error { return errors.New("raw broke") })
+	r.Fallback()
+	c := htest.New(t, r)
+	id := htest.Header("X-Request-Id", "r1")
+
+	for _, tc := range []struct {
+		method, path string
+		opts         []htest.RequestOption
+		want         int
+	}{
+		{"GET", "/fails", nil, http.StatusInternalServerError},
+		{"GET", "/panics", nil, http.StatusInternalServerError},
+		{"GET", "/fails", []htest.RequestOption{htest.Header("Accept", "image/png, application/problem+json")}, http.StatusNotAcceptable},
+		{"GET", "/raw", nil, http.StatusInternalServerError},
+		{"GET", "/nope", nil, http.StatusNotFound},
+		{"DELETE", "/fails", nil, http.StatusMethodNotAllowed},
+		{"POST", "/items", []htest.RequestOption{htest.Header("Sec-Fetch-Site", "cross-site")}, http.StatusForbidden},
+	} {
+		p := c.Do(tc.method, tc.path, nil, append(tc.opts, id)...).Expect(t, tc.want).Problem(t)
+		if p.Extra["request_id"] != "r1" {
+			t.Errorf("%s %s: problem %+v lacks the request ID", tc.method, tc.path, p)
+		}
+	}
+}
+
+func TestAnnotateCannotChangeTheStatus(t *testing.T) {
+	var log htest.Errors
+	r := newRouter(t, h.Config{
+		OnError:  log.OnError,
+		Annotate: func(f h.Failure) problem.Problem { f.Problem.Status = http.StatusTeapot; return f.Problem },
+	})
+	r.Get("/x", failing(errors.New("boom")))
+	htest.New(t, r).Do("GET", "/x", nil).Expect(t, http.StatusInternalServerError)
+	if !errors.Is(log.Last(t).Err, h.ErrInvalidProblem) {
+		t.Fatalf("OnError got %v, want ErrInvalidProblem", log.Last(t).Err)
+	}
+}
+
+func TestOnErrorCannotChangeTheResponse(t *testing.T) {
+	r := newRouter(t, h.Config{
+		Errors: problem.Func(func(error) (problem.Problem, bool) {
+			return problem.Problem{Status: http.StatusInternalServerError, Extra: map[string]any{"code": "internal"}}, true
+		}),
+		OnError: func(f h.Failure) { f.Problem.Extra["leaked"] = true },
+	})
+	r.Get("/x", failing(errors.New("boom")))
+	if p := htest.New(t, r).Do("GET", "/x", nil).Problem(t); p.Extra["leaked"] != nil {
+		t.Fatalf("OnError changed the body: %+v", p.Extra)
 	}
 }

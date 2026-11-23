@@ -221,3 +221,14 @@ func TestIsWithNilTargetIsInvalid(t *testing.T) {
 		t.Fatalf("Err() = %v, want ErrInvalid", err)
 	}
 }
+
+func TestWithLeavesTheOriginalExtraUnchanged(t *testing.T) {
+	shared := problem.Problem{Status: 404, Extra: map[string]any{"code": "missing"}}
+	got := shared.With("request_id", "r1")
+	if got.Extra["code"] != "missing" || got.Extra["request_id"] != "r1" {
+		t.Fatalf("With = %+v", got.Extra)
+	}
+	if _, ok := shared.Extra["request_id"]; ok {
+		t.Fatalf("original changed: %+v", shared.Extra)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jacoelho/h/internal/serverfield"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -70,6 +71,17 @@ func (p Problem) Validate() error {
 		}
 	}
 	return nil
+}
+
+// With returns a copy of p with the extension member name set to v. p's
+// own Extra map is left unchanged, so a Problem shared with others can be
+// extended safely.
+func (p Problem) With(name string, v any) Problem {
+	extra := make(map[string]any, len(p.Extra)+1)
+	maps.Copy(extra, p.Extra)
+	extra[name] = v
+	p.Extra = extra
+	return p
 }
 
 // TypeOrBlank returns p.Type, or "about:blank" when it is empty.

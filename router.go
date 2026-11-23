@@ -46,9 +46,19 @@ type Config struct {
 	// matches none. nil means problem.RFC9457 then problem.Text. A
 	// non-nil list must not be empty.
 	ProblemFormats []problem.Format
-	// OnError observes every error answered as a problem. It must not write
-	// to the response or panic (see OnError).
-	OnError OnError
+	// Annotate adds request data, such as a request ID, to every problem
+	// the router answers with, including the ones it raises itself. It
+	// runs after mapping and before OnError, and must keep the status; an
+	// answer that changes it or is invalid is reported as
+	// ErrInvalidProblem and the problem stands. Annotate gets copies of the
+	// problem's maps.
+	Annotate func(Failure) problem.Problem
+	// OnError observes every error answered as a problem, with a copy of
+	// the problem. It runs before the problem is written and must not write
+	// to the response or panic: a panic is not recovered, since OnError is
+	// where it would be reported, and reaches the http.Server, which logs it
+	// and closes the connection.
+	OnError func(Failure)
 	// MaxBody bounds request bodies in bytes; 0 means 1 MiB.
 	MaxBody int64
 	// MaxMemory bounds multipart form data held in memory; 0 means 1 MiB.
@@ -158,7 +168,7 @@ func New(cfg Config) (*Router, error) {
 	if c.cors, err = newCORSPolicy(cfg.TrustedOrigins, cfg.CORS); err != nil {
 		return nil, err
 	}
-	if _, err := newResolver(mapping{}, cfg.ProblemFormats, nil); err != nil {
+	if _, err := newResolver(mapping{}, cfg.ProblemFormats, nil, nil); err != nil {
 		return nil, fmt.Errorf("h: Config.ProblemFormats: %w", err)
 	}
 	return &Router{core: c}, nil
@@ -456,7 +466,7 @@ func (r *Router) resolve(own level) (resolved, error) {
 	}
 	m.domain = append(m.domain, cfg.Errors)
 	m.refusals = append(m.refusals, cfg.RequestErrors)
-	rs, err := newResolver(m, formats, cfg.OnError)
+	rs, err := newResolver(m, formats, cfg.Annotate, cfg.OnError)
 	if err != nil {
 		return resolved{}, err
 	}

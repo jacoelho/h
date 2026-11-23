@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/jacoelho/h/problem"
 	"io"
 	"log"
 	"net"
@@ -213,7 +212,7 @@ func TestUnreadStalledBodyIsBoundedByReadTimeout(t *testing.T) {
 }
 
 func TestPanickingOnErrorReachesServerErrorLog(t *testing.T) {
-	r := newRouter(t, h.Config{OnError: func(context.Context, *http.Request, error, problem.Problem) { panic("observer broke") }})
+	r := newRouter(t, h.Config{OnError: func(h.Failure) { panic("observer broke") }})
 	r.Get("/x", failing(errors.New("boom")))
 	var logged syncBuffer
 	s := httptest.NewUnstartedServer(handlerOf(t, r))
