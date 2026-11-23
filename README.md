@@ -183,7 +183,7 @@ The router refuses some requests itself, with a `*h.RequestError` whose status i
 - 403 for a refused cross-origin request (`h.ErrCrossOrigin`)
 - with `Fallback`, 404 (`h.ErrNoRoute`) and 405 (`h.ErrMethodNotAllowed`)
 
-Mappers can describe these problems, for example with a stable code for clients, but must keep the status. A malformed body arrives as a `*codec.DecodeError`. For JSON it wraps json/v2's `*json.SemanticError`, whose `JSONPointer` names the field, or a `*jsontext.SyntacticError`. For a body that is too large or too slow, mappers are offered only the `*h.RequestError`, never the decoder error around it, so the order of these two mappers does not matter:
+Mappers can describe these problems, for example with a stable code for clients, but must keep the status. A malformed body arrives as a `*codec.DecodeError`. For JSON it wraps json/v2's `*json.SemanticError`, whose `JSONPointer` names the field, or a `*jsontext.SyntacticError`. For a body that is too large or too slow, mappers are offered only the `*h.RequestError`, never the decoder error around it. The order of these two mappers does not matter:
 
 ```go
 var RequestErrors = problem.Map(
