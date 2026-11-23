@@ -654,21 +654,35 @@ func TestEmptyGroupPrefixAppliesOnlyOptions(t *testing.T) {
 type carriedServings int
 
 func (s *carriedServings) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
-	if _, err := dec.ReadValue(); err != nil {
+	v, err := dec.ReadValue()
+	if err != nil {
 		return err
 	}
-	return problem.Error(problem.Problem{Status: http.StatusInternalServerError, Title: "leaked"})
+	status := http.StatusUnprocessableEntity
+	if string(v) == "500" {
+		status = http.StatusInternalServerError
+	}
+	return problem.Error(problem.Problem{Status: status, Title: "Bad servings"})
 }
 
-func TestProblemCarriedInsideARefusalStays4xx(t *testing.T) {
+func TestProblemCarriedInsideARefusalIsSentWhen4xx(t *testing.T) {
 	type order struct {
 		Servings carriedServings `json:"servings"`
 	}
-	r := newRouter(t, h.Config{})
+	var log htest.Errors
+	r := newRouter(t, h.Config{OnError: log.OnError})
 	r.Post("/orders", h.Func(func(_ context.Context, in order) (order, error) { return in, nil }))
-	p := htest.New(t, r).Do("POST", "/orders", `{"servings":2}`, htest.Header("Content-Type", "application/json")).Expect(t, http.StatusBadRequest).Problem(t)
-	if p.Title == "leaked" {
-		t.Fatalf("carried problem escaped the refusal: %+v", p)
+	c := htest.New(t, r)
+	json := htest.Header("Content-Type", "application/json")
+
+	if p := c.Do("POST", "/orders", `{"servings":2}`, json).Expect(t, http.StatusUnprocessableEntity).Problem(t); p.Title != "Bad servings" {
+		t.Fatalf("problem %+v, want the carried one", p)
+	}
+	if p := c.Do("POST", "/orders", `{"servings":500}`, json).Expect(t, http.StatusBadRequest).Problem(t); p.Title == "Bad servings" {
+		t.Fatalf("carried 500 escaped the refusal: %+v", p)
+	}
+	if !errors.Is(log.Last(t).Err, h.ErrInvalidProblem) {
+		t.Fatalf("OnError got %v, want ErrInvalidProblem", log.Last(t).Err)
 	}
 }
 
