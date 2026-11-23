@@ -3,7 +3,7 @@ package codec_test
 import (
 	"bytes"
 	"encoding/json/jsontext"
-	json "encoding/json/v2"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"iter"
