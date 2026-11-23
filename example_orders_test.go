@@ -75,11 +75,16 @@ func (s *OrderService) Get(_ context.Context, id OrderID) (Order, error) {
 	return s.orders[i], nil
 }
 
-func (s *OrderService) List(_ context.Context, statuses []OrderStatus) ([]Order, error) {
+// List returns up to limit orders in one of statuses; zero values mean no
+// limit and every status.
+func (s *OrderService) List(_ context.Context, statuses []OrderStatus, limit int64) ([]Order, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []Order
 	for _, o := range s.orders {
+		if limit > 0 && int64(len(out)) == limit {
+			break
+		}
 		if len(statuses) == 0 || slices.Contains(statuses, o.Status) {
 			out = append(out, o)
 		}
@@ -87,13 +92,42 @@ func (s *OrderService) List(_ context.Context, statuses []OrderStatus) ([]Order,
 	return out, nil
 }
 
-var orderErrors = problem.Map(
-	problem.Is(ErrOrderNotFound, problem.Problem{Status: http.StatusNotFound, Type: "https://example.com/probs/order-not-found", Title: "Order not found"}),
-	problem.Is(ErrOutOfStock, problem.Problem{Status: http.StatusConflict, Type: "https://example.com/probs/out-of-stock", Title: "Out of stock"}),
+type LimitError struct{ Remaining int }
+
+func (e *LimitError) Error() string { return fmt.Sprintf("limit reached, %d left", e.Remaining) }
+
+// README begin order-errors
+var OrderErrors = problem.Map(
+	problem.Is(ErrOrderNotFound, problem.Problem{
+		Status: http.StatusNotFound,
+		Type:   "https://example.com/probs/order-not-found",
+		Title:  "Order not found",
+	}),
+	problem.Is(ErrOutOfStock, problem.Problem{
+		Status: http.StatusConflict,
+		Type:   "https://example.com/probs/out-of-stock",
+		Title:  "Out of stock",
+	}),
+	problem.As(func(e *LimitError) problem.Problem {
+		p := problem.Problem{Status: http.StatusTooManyRequests, Header: http.Header{}}
+		p.Header.Set("Retry-After", "60")
+		return p
+	}),
 )
 
+// README end
+
+// README begin order-errors-test
+func TestOrderErrorsAreValid(t *testing.T) {
+	if err := OrderErrors.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// README end
+
 func RegisterOrders(r *h.Router, svc *OrderService) {
-	g := r.Group("/orders", h.Errors(orderErrors))
+	g := r.Group("/orders", h.Errors(OrderErrors))
 	g.Post("/", func(ctx context.Context, req h.Request[NewOrder]) (h.Response[Order], error) {
 		o, err := svc.Create(ctx, req.Body())
 		if err != nil {
@@ -106,20 +140,16 @@ func RegisterOrders(r *h.Router, svc *OrderService) {
 	}, svc.Get))
 	g.Get("/", func(ctx context.Context, req h.Request[h.Empty]) (h.Response[[]Order], error) {
 		var statuses []OrderStatus
+		var limit int64
 		if err := req.Parse(func(p *h.Params) {
 			statuses = p.QueryAll("status", h.OneOf(Open, Closed))
+			limit = p.QueryOr("limit", 20, h.Int64)
 		}); err != nil {
 			return h.Response[[]Order]{}, err
 		}
-		orders, err := svc.List(ctx, statuses)
+		orders, err := svc.List(ctx, statuses, limit)
 		return h.OK(orders), err
 	})
-}
-
-func TestOrderErrorsAreValid(t *testing.T) {
-	if err := orderErrors.Err(); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestOrdersVertical(t *testing.T) {

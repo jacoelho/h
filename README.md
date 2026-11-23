@@ -2,6 +2,8 @@
 
 h is a Go HTTP router whose handlers are typed functions:
 
+<!-- example: none -->
+
 ```go
 func(ctx context.Context, req h.Request[In]) (h.Response[Out], error)
 ```
@@ -20,7 +22,10 @@ go get github.com/jacoelho/h
 
 This program answers `GET /greet/{name}` with JSON, and answers an unknown name with a 404 problem:
 
+<!-- example: greet -->
+
 ```go
+// Command greet answers GET /greet/{name} with a JSON greeting.
 package main
 
 import (
@@ -33,10 +38,12 @@ import (
 	"github.com/jacoelho/h/problem"
 )
 
+// Greeting is the body GET /greet/{name} answers with.
 type Greeting struct {
 	Message string `json:"message"`
 }
 
+// ErrUnknownName reports a name greet has no greeting for.
 var ErrUnknownName = errors.New("unknown name")
 
 func greet(_ context.Context, name string) (Greeting, error) {
@@ -96,6 +103,8 @@ There are three ways to write one:
 
 Register endpoints with `Get`, `Delete`, `Post`, `Put` and `Patch`. `Get` and `Delete` take no body, so their `In` is `h.Empty`. Group routes that share a prefix and options:
 
+<!-- example: group -->
+
 ```go
 orders := r.Group("/orders", h.Errors(OrderErrors))
 
@@ -104,7 +113,7 @@ orders.Post("/", func(ctx context.Context, req h.Request[NewOrder]) (h.Response[
 	if err != nil {
 		return h.Response[Order]{}, err
 	}
-	return h.Created(req.Link("orders", o.ID), o), nil
+	return h.Created(req.Link("orders", string(o.ID)), o), nil
 })
 ```
 
@@ -115,6 +124,8 @@ Responses are values: `h.OK`, `h.Created`, `h.Accepted`, `h.NoContent`, `h.NotMo
 ## Read path, query and header values
 
 Read every value inside one `Parse` call. The call reports all missing or malformed values together:
+
+<!-- example: parse -->
 
 ```go
 orders.Get("/", func(ctx context.Context, req h.Request[h.Empty]) (h.Response[[]Order], error) {
@@ -137,6 +148,8 @@ A parser is any `func(string) (T, error)`. The package provides `h.String`, `h.I
 
 An empty value, as in `?after=`, is present and passed to the parser, so the parser decides what it means. An HTML form submitted with GET sends its blank fields this way. To read an empty value as absent, wrap the parser:
 
+<!-- example: optional -->
+
 ```go
 func optional[T any](parse func(string) (T, error)) func(string) (*T, error) {
 	return func(s string) (*T, error) {
@@ -150,15 +163,23 @@ func optional[T any](parse func(string) (T, error)) func(string) (*T, error) {
 		return &v, nil
 	}
 }
+```
 
+Use the wrapper with `QueryOr`, `HeaderOr` or `ValueOr` and a nil default:
+
+<!-- example: optional-use -->
+
+```go
 after := p.QueryOr("after", nil, optional(h.Time(time.RFC3339))) // nil when absent or empty
 ```
 
-Use the wrapper with `QueryOr`, `HeaderOr` or `ValueOr` and a nil default. With `Query`, a required value that is empty would pass as nil, and with `QueryOpt`, an empty value would be reported as present.
+With `Query`, a required value that is empty would pass as nil, and with `QueryOpt`, an empty value would be reported as present.
 
 ## Translate errors into problems
 
 Give each business capability one `problem.Mapper` and attach it to that capability's group:
+
+<!-- example: order-errors -->
 
 ```go
 var OrderErrors = problem.Map(
@@ -166,6 +187,11 @@ var OrderErrors = problem.Map(
 		Status: http.StatusNotFound,
 		Type:   "https://example.com/probs/order-not-found",
 		Title:  "Order not found",
+	}),
+	problem.Is(ErrOutOfStock, problem.Problem{
+		Status: http.StatusConflict,
+		Type:   "https://example.com/probs/out-of-stock",
+		Title:  "Out of stock",
 	}),
 	problem.As(func(e *LimitError) problem.Problem {
 		p := problem.Problem{Status: http.StatusTooManyRequests, Header: http.Header{}}
@@ -186,6 +212,8 @@ The route's mappers are tried first, then its groups', then `Config.Errors`.
 
 For a one-off answer that no mapper needs to know, return `problem.Error(p)`. The router sends the problem as it is, after checking it is valid, without consulting mappers, even when the error is wrapped. Wrap only problems your own code made, since a problem built from another service's response is sent verbatim. Inside a refusal, such as from a custom unmarshaler, it is sent when its status is 4xx. Otherwise the router's status stands and `ErrInvalidProblem` is reported. `problem.FromError` gets it back, for tests or middleware:
 
+<!-- example: out-of-stock -->
+
 ```go
 if stock == 0 {
 	return h.Response[Order]{}, problem.Error(problem.Problem{Status: http.StatusConflict, Title: "Out of stock"})
@@ -195,6 +223,8 @@ if stock == 0 {
 An error no mapper knows is answered with 500. Its text goes only to `Config.OnError`, never to the client. A panic in an endpoint is answered with 500 and reported as `h.ErrPanic`. An error that wraps the request's own context error is answered by the router, without mappers: 499 when the client has gone, 503 when the request's deadline passed.
 
 A mapper with a fixed problem is checked when it is built. Assert that in the capability's own tests:
+
+<!-- example: order-errors-test -->
 
 ```go
 func TestOrderErrorsAreValid(t *testing.T) {
@@ -220,6 +250,8 @@ These refusals never reach `Errors` mappers, so a catch-all mapper cannot turn a
 
 List a `*codec.DecodeError` mapper before a `*h.RequestError` mapper, since a malformed body matches both:
 
+<!-- example: refusal-problems -->
+
 ```go
 var RefusalProblems = problem.Map(
 	problem.As(func(e *codec.DecodeError) problem.Problem {
@@ -240,7 +272,13 @@ var RefusalProblems = problem.Map(
 		return p
 	}),
 )
+```
 
+Pass the mapper as `Config.RequestErrors`:
+
+<!-- example: refusal-config -->
+
+```go
 r, err := h.New(h.Config{RequestErrors: RefusalProblems})
 ```
 
@@ -257,14 +295,18 @@ The type of `In` selects how the body is read:
 | `h.RawBody` | the bytes as sent | the route must set `h.Consumes`; `"*/*"` accepts any valid `Content-Type`, or none |
 | `h.Seq[T]` | a JSON array or NDJSON, read one element at a time | range over `req.Body().All()` |
 
+<!-- example: photos -->
+
 ```go
 r.Post("/photos", func(ctx context.Context, req h.Request[h.RawBody]) (h.Response[h.Empty], error) {
 	f, err := os.CreateTemp("", "photo-*")
 	if err != nil {
 		return h.Response[h.Empty]{}, err
 	}
-	defer f.Close()
 	_, err = io.Copy(f, req.Body().Reader())
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
 	return h.NoContent[h.Empty](), err
 }, h.Consumes("image/*"), h.MaxBody(10<<20))
 ```
@@ -277,6 +319,8 @@ A body sent without `Content-Type` is matched as `application/octet-stream`, as 
 
 Return `h.Seq[T]` to write a JSON array or NDJSON element by element. The router ranges over the source after the endpoint returns, so the source must honour its context:
 
+<!-- example: export -->
+
 ```go
 orders.Get("/export", func(ctx context.Context, _ h.Request[h.Empty]) (h.Response[h.Seq[Order]], error) {
 	return h.OK(h.Items(svc.All(ctx))), nil
@@ -284,6 +328,8 @@ orders.Get("/export", func(ctx context.Context, _ h.Request[h.Empty]) (h.Respons
 ```
 
 NDJSON is not in the default codec set. Register it with `codec.Set.Encodes` and `Decodes`. Every route offers the codecs in `Config.Codecs`. Give a media type that only some routes write its own set with `h.Codecs`. This download is JSON-LD with object members in a fixed order, and no other route answers JSON-LD:
+
+<!-- example: jsonld -->
 
 ```go
 ld := codec.NewSet()
@@ -301,6 +347,8 @@ Like any route whose body a codec writes, it answers 406 to an `Accept` its code
 
 Return `h.Stream` to write bytes in a content type of your own:
 
+<!-- example: csv -->
+
 ```go
 r.Get("/report.csv", func(ctx context.Context, _ h.Request[h.Empty]) (h.Response[h.Stream], error) {
 	return h.OK(h.NewStream("text/csv", func(w *h.StreamWriter) error {
@@ -314,6 +362,8 @@ Responses up to `SpillAt` bytes are buffered and sent with `Content-Length`. Whi
 
 For a handler that must write the response itself, such as one serving files, use `Handle`. An error it returns before writing is answered as a problem:
 
+<!-- example: handle -->
+
 ```go
 r.Handle("GET", "/static/{file...}", func(w http.ResponseWriter, req *http.Request) error {
 	http.ServeFileFS(w, req, os.DirFS("static"), req.PathValue("file"))
@@ -322,6 +372,8 @@ r.Handle("GET", "/static/{file...}", func(w http.ResponseWriter, req *http.Reque
 ```
 
 `h.Raw` adapts a handler that returns no error, either a plain function or an `http.Handler` passed as its method value:
+
+<!-- example: raw -->
 
 ```go
 r.Handle("GET", "/healthz", h.Raw(func(w http.ResponseWriter, _ *http.Request) {
@@ -367,6 +419,8 @@ Every route is protected against cross-site request forgery by `http.CrossOrigin
 
 To let a frontend on another origin call the API, list its origin. The same list drives CORS:
 
+<!-- example: cors -->
+
 ```go
 r, err := h.New(h.Config{
 	TrustedOrigins: []string{"https://app.example.com"},
@@ -382,6 +436,8 @@ To exempt one route that other sites must reach, such as a single sign-on callba
 
 `r.Use` on the root router wraps every request, including unmatched ones. On a group, it wraps that group's routes. Package `mw` provides `RequestID`, `AccessLog` and `Timeout`. `AccessLog` writes one line per request to the logger you pass, at the level you pass:
 
+<!-- example: middleware -->
+
 ```go
 r.Use(mw.RequestID("X-Request-Id"), mw.AccessLog(logger, slog.LevelInfo), mw.Timeout(10*time.Second))
 ```
@@ -389,6 +445,8 @@ r.Use(mw.RequestID("X-Request-Id"), mw.AccessLog(logger, slog.LevelInfo), mw.Tim
 Every problem the router answers is described by an `h.Failure`: the `Request`, the `Err` that caused it, and the `Problem` the client is sent. Two hooks receive it.
 
 `Config.Annotate` adds request data to every problem, including the ones the router raises itself, such as a 404 or a malformed body. It runs after the mappers, so they stay functions of the error alone. It must keep the status. `Problem.With` adds a member without changing a map another problem shares:
+
+<!-- example: annotate -->
 
 ```go
 Annotate: func(f h.Failure) problem.Problem {
@@ -400,6 +458,8 @@ Annotate: func(f h.Failure) problem.Problem {
 ```
 
 `Config.OnError` observes every failure and gets its own copy of the problem. An error found after the response was sent, such as failing to remove multipart temporary files, arrives with the zero `Problem`. Most failures are refusals and mapped domain errors that need no log entry. Log the ones answered with a 5xx status. Also log the ones `f.Hidden()` reports, whose status does not show them. A panic and a stream that failed after it started are two:
+
+<!-- example: onerror -->
 
 ```go
 OnError: func(f h.Failure) {
@@ -416,6 +476,8 @@ OnError: func(f h.Failure) {
 
 Set `Config.BasePath` to serve under a prefix. Routes, groups and `req.Link` are relative to it. Mount the handler in an outer mux with `r.Mount()`:
 
+<!-- example: mount -->
+
 ```go
 mux := http.NewServeMux()
 mux.Handle(r.Mount(), handler) // "/shop/" for BasePath "/shop"
@@ -424,6 +486,8 @@ mux.Handle(r.Mount(), handler) // "/shop/" for BasePath "/shop"
 Call `r.Fallback()` to answer unmatched paths under the router with problems: 405 with `Allow` when the path has routes for other methods, otherwise 404. Without it, those requests get net/http's plain-text answers.
 
 To serve a single-page app under the same base path as the API, register it as a catch-all route. The mux picks the most specific pattern, so API routes still win. The catch-all also answers unknown API paths: a GET gets the app, and other methods get 405. To answer those with 404, serve the app under its own prefix, such as `/app/{path...}`:
+
+<!-- example: single-page-app -->
 
 ```go
 r.Get("/api/orders", listOrders)
@@ -436,6 +500,8 @@ Registration never panics. Every mistake is collected, and `r.Handler()` returns
 
 Build the handler once at startup and fail fast:
 
+<!-- example: handler -->
+
 ```go
 handler, err := r.Handler()
 if err != nil {
@@ -446,6 +512,8 @@ if err != nil {
 ## Test routes and endpoints
 
 Package `htest` sends requests to a router in process. `htest.New` fails the test when the router has setup mistakes. Paths are relative to the base path:
+
+<!-- example: create-order-test -->
 
 ```go
 func TestCreateOrder(t *testing.T) {
@@ -524,13 +592,14 @@ Within `h`, each file owns one capability:
 - `params.go` and `form.go`: path, query, header and form values
 - `cors.go`: cross-origin resource sharing
 
-Tests sit next to the capability they check. `contracts_test.go` holds regression tests from code review, and `example_orders_test.go` is a complete worked example.
+Tests sit next to the capability they check. `contracts_test.go` holds regression tests from code review, and `example_orders_test.go` is a complete worked example. `readme_examples_test.go` and `internal/examples/greet` hold the README's code.
 
 ### Keep these rules
 
 - **The library does not panic on a caller mistake.** Registration records a setup error, and request-time mistakes become problems reported to `OnError`. The panics left are `http.ErrAbortHandler`, which is net/http's documented way to abort a started response, and re-panics of it.
 - **Errors keep their context.** Wrap with `%w`, and never swallow an error. A failure that cannot be answered goes to `OnError`.
 - **Every router change goes through `Router.mutable`,** so a change after `Handler` is reported, not lost.
+- **README code lives in Go files.** Each Go block in this README follows an `<!-- example: NAME -->` marker and equals the region between `// README begin NAME` and `// README end` in a `.go` file, mostly `readme_examples_test.go`. `TestREADMEGoBlocksMatchTheirRegions` fails on a difference, a missing region, or an unmarked block. Change the region, then copy it into the README. Mark a block that cannot compile, such as a signature, `<!-- example: none -->`.
 - **Whether a response has started is owned by `trackingWriter`.** Other writers read it, never copy it. `trackingWriter.answer` decides between writing a problem and aborting.
 
 ### Know the lifecycles
