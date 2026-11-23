@@ -38,8 +38,10 @@ type Config struct {
 	// codec.Default(codec.JSON{}). Use codec.Default(codec.JSON{
 	// RejectUnknownFields: true}) to refuse unknown object members.
 	Codecs *codec.Set
-	// ProblemFormats are the formats problems are written in; nil means
-	// problem.RFC9457. problem.Text is always the last resort.
+	// ProblemFormats are the formats problems are written in, negotiated by
+	// Accept in the order given; the last one answers an Accept that
+	// matches none. nil means problem.RFC9457 then problem.Text. A
+	// non-nil list must not be empty.
 	ProblemFormats []problem.Format
 	// OnError observes every error answered as a problem. It must not write
 	// to the response or panic (see OnError).
@@ -120,7 +122,7 @@ func New(cfg Config) (*Router, error) {
 		cfg.Codecs = codec.Default(codec.JSON{})
 	}
 	if cfg.ProblemFormats == nil {
-		cfg.ProblemFormats = []problem.Format{problem.RFC9457}
+		cfg.ProblemFormats = []problem.Format{problem.RFC9457, problem.Text}
 	}
 	for name, v := range map[string]int64{"MaxBody": cfg.MaxBody, "MaxMemory": cfg.MaxMemory, "SpillAt": int64(cfg.SpillAt)} {
 		if v < 0 {

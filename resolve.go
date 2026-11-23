@@ -34,7 +34,10 @@ type resolver struct {
 }
 
 func newResolver(mappers []problem.Mapper, formats []problem.Format, onError OnError) (*resolver, error) {
-	fs := append(slices.Clone(formats), problem.Text)
+	if len(formats) == 0 {
+		return nil, errors.New("h: no problem formats")
+	}
+	fs := slices.Clone(formats)
 	offers := make([]media.Type, len(fs))
 	for i, f := range fs {
 		if f == nil {
@@ -158,6 +161,8 @@ func (rs *resolver) write(w http.ResponseWriter, req *http.Request, p problem.Pr
 	}
 	i, ok := media.Negotiate(req.Header.Values("Accept"), rs.offers, true)
 	if !ok {
+		// RFC 9110, section 12.4.1: a server may disregard an Accept it
+		// cannot satisfy.
 		i = len(rs.formats) - 1
 	}
 	var buf bytes.Buffer

@@ -207,7 +207,7 @@ var RequestErrors = problem.Map(
 )
 ```
 
-Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. `problem.Text` is always the last resort. A format and `OnError` receive the status's reason phrase as the title of an `about:blank` problem that has none. `problem.Read` decodes a problem body, for clients and tests.
+Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. The last format listed answers a client whose `Accept` matches none, as RFC 9110 allows. The default list is `problem.RFC9457` then `problem.Text`. A list you set replaces it, so `[]problem.Format{problem.RFC9457}` answers every client with JSON. A format and `OnError` receive the status's reason phrase as the title of an `about:blank` problem that has none. `problem.Read` decodes a problem body, for clients and tests.
 
 ## Read forms, uploads and sequences
 
