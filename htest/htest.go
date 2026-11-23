@@ -5,7 +5,7 @@ package htest
 
 import (
 	"bytes"
-	json "encoding/json/v2"
+	"encoding/json/v2"
 	"io"
 	"net/http"
 	"net/http/httptest"

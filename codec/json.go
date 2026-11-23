@@ -2,7 +2,7 @@ package codec
 
 import (
 	"encoding/json/jsontext"
-	json "encoding/json/v2"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"reflect"
