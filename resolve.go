@@ -125,8 +125,8 @@ func clone(p problem.Problem) problem.Problem {
 }
 
 // classify chooses the problem for err. Refusals come first, so a carried
-// problem inside one, such as from a custom unmarshaler, is for the
-// RequestErrors mappers to use and cannot leave the 4xx range.
+// problem inside one, such as from a custom unmarshaler, is held to the
+// refusal's 4xx range.
 func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, error) {
 	if pe, ok := errors.AsType[*ParamsError](err); ok {
 		return rs.refuse(err, err, pe.problem())
@@ -165,13 +165,17 @@ func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, err
 	return internalProblem(), err
 }
 
-// refuse answers a request the router refuses, offering cause to the
-// refusal mappers and reporting err, the chain it arrived in. For a
-// RequestError, cause is the RequestError and what it wraps, not the chain
-// around it, such as a decoder wrapping a body read failure. A mapper may
-// answer any 4xx status; otherwise fixed stands.
+// refuse answers a request the router refuses with the problem carried in
+// cause, or else the refusal mappers' answer, and reports err, the chain it
+// arrived in. For a RequestError, cause is the RequestError and what it
+// wraps, not the chain around it, such as a decoder wrapping a body read
+// failure. Either answer may have any 4xx status; otherwise fixed stands.
 func (rs *resolver) refuse(err, cause error, fixed problem.Problem) (problem.Problem, error) {
-	p, ok, perr := mapped(rs.refusals, cause)
+	p, ok := problem.FromError(cause)
+	var perr error
+	if !ok {
+		p, ok, perr = mapped(rs.refusals, cause)
+	}
 	if perr != nil {
 		return fixed, errors.Join(err, perr)
 	}

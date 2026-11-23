@@ -21,7 +21,7 @@ var (
 	ErrInvalidResponse = errors.New("h: invalid response")
 	// ErrInvalidProblem reports a problem the router discarded: a mapper,
 	// Annotate or problem.Error answer that is invalid, a RequestErrors
-	// answer outside 4xx, an Annotate answer that changes the status, or a
+	// answer or a problem.Error inside a refusal outside 4xx, an Annotate answer that changes the status, or a
 	// RequestError with a status outside 400 to 599.
 	ErrInvalidProblem = errors.New("h: invalid problem")
 	// ErrPanic reports an endpoint that panicked; see PanicError.

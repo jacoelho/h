@@ -163,7 +163,7 @@ The mapper constructors are:
 
 The route's mappers are tried first, then its groups', then `Config.Errors`.
 
-For a one-off answer that no mapper needs to know, return `problem.Error(p)`. The router sends the problem as it is, after checking it is valid, without consulting mappers, even when the error is wrapped. Wrap only problems your own code made, since a problem built from another service's response is sent verbatim. Inside a refusal, such as from a custom unmarshaler, it is offered to `RequestErrors` mappers like any other wrapped error. `problem.FromError` gets it back, for tests or middleware:
+For a one-off answer that no mapper needs to know, return `problem.Error(p)`. The router sends the problem as it is, after checking it is valid, without consulting mappers, even when the error is wrapped. Wrap only problems your own code made, since a problem built from another service's response is sent verbatim. Inside a refusal, such as from a custom unmarshaler, it is sent when its status is 4xx; otherwise the router's status stands and `ErrInvalidProblem` is reported. `problem.FromError` gets it back, for tests or middleware:
 
 ```go
 if stock == 0 {
