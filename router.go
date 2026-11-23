@@ -37,7 +37,8 @@ type Config struct {
 	// RequestErrors describes the requests the router refuses itself when
 	// no route or group mapper does; see the RequestErrors option.
 	RequestErrors problem.Mapper
-	// Codecs are the codecs routes negotiate between; nil means
+	// Codecs are the codecs routes negotiate between unless the Codecs
+	// option sets others for them; nil means
 	// codec.Default(codec.JSON{}). Use codec.Default(codec.JSON{
 	// RejectUnknownFields: true}) to refuse unknown object members.
 	Codecs *codec.Set
@@ -93,7 +94,6 @@ type Router struct {
 type core struct {
 	base   string
 	cfg    Config
-	codecs *codec.Set
 	csrf   *http.CrossOriginProtection
 	cors   corsPolicy
 	use    []Middleware
@@ -155,10 +155,9 @@ func New(cfg Config) (*Router, error) {
 		cfg.SpillAt = 64 << 10
 	}
 	c := &core{
-		base:   base,
-		cfg:    cfg,
-		codecs: cfg.Codecs,
-		csrf:   http.NewCrossOriginProtection(),
+		base: base,
+		cfg:  cfg,
+		csrf: http.NewCrossOriginProtection(),
 	}
 	for _, o := range cfg.TrustedOrigins {
 		if err := c.csrf.AddTrustedOrigin(o); err != nil {
@@ -420,6 +419,7 @@ func (c *core) allowed(req *http.Request) []string {
 
 type resolved struct {
 	resolver  *resolver
+	codecs    *codec.Set
 	produces  []string
 	consumes  []string
 	maxBody   int64
@@ -431,7 +431,7 @@ type resolved struct {
 
 func (r *Router) resolve(own level) (resolved, error) {
 	cfg := r.core.cfg
-	res := resolved{maxBody: cfg.MaxBody, maxMemory: cfg.MaxMemory, spillAt: cfg.SpillAt}
+	res := resolved{codecs: cfg.Codecs, maxBody: cfg.MaxBody, maxMemory: cfg.MaxMemory, spillAt: cfg.SpillAt}
 	var levels []level
 	for x := r; x != nil; x = x.parent {
 		levels = append(levels, x.level)
@@ -445,6 +445,9 @@ func (r *Router) resolve(own level) (resolved, error) {
 		m.refusals = append(slices.Clone(l.refusals), m.refusals...)
 		if l.formats != nil {
 			formats = l.formats
+		}
+		if l.codecs != nil {
+			res.codecs = l.codecs
 		}
 		if l.produces != nil {
 			res.produces = l.produces

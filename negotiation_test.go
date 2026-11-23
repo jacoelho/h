@@ -146,3 +146,53 @@ func TestOneDirectionalTextTypes(t *testing.T) {
 		t.Fatalf("unmarshal-only input %q", got)
 	}
 }
+
+func ldOnly(t *testing.T) *codec.Set {
+	t.Helper()
+	s := codec.NewSet()
+	if err := s.Encodes(codec.JSON{}, "application/ld+json"); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestCodecsClosestScopeWins(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	ld := r.Group("/ld", h.Codecs(ldOnly(t)))
+	ld.Get("/inherited", respond(h.OK(item{"a"})))
+	ld.Get("/own", respond(h.OK(item{"b"})), h.Codecs(codec.Default(codec.JSON{})))
+	r.Get("/plain", respond(h.OK(item{"c"})))
+	for _, c := range []struct {
+		target, accept string
+		status         int
+		contentType    string
+	}{
+		{"/ld/inherited", "", http.StatusOK, "application/ld+json"},
+		{"/ld/inherited", "application/json", http.StatusNotAcceptable, "application/problem+json"},
+		{"/ld/own", "application/ld+json", http.StatusNotAcceptable, "text/plain; charset=utf-8"},
+		{"/ld/own", "", http.StatusOK, "application/json"},
+		{"/plain", "application/ld+json", http.StatusNotAcceptable, "text/plain; charset=utf-8"},
+	} {
+		var header http.Header
+		if c.accept != "" {
+			header = http.Header{"Accept": {c.accept}}
+		}
+		w := send(t, r, call{method: "GET", target: c.target, header: header})
+		if w.Code != c.status || w.Header().Get("Content-Type") != c.contentType {
+			t.Errorf("GET %s with Accept %q answered %d %s, want %d %s", c.target, c.accept, w.Code, w.Header().Get("Content-Type"), c.status, c.contentType)
+		}
+	}
+}
+
+func TestCodecsUnusableByInheritedProducesIsASetupError(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	api := r.Group("/api", h.Produces("application/json"))
+	api.Get("/doc", respond(h.OK(item{"a"})), h.Codecs(ldOnly(t)))
+	wantSetupError(t, r, `GET /api/doc`)
+}
+
+func TestNilCodecsIsASetupError(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Get("/x", respond(h.OK(item{"a"})), h.Codecs(nil))
+	wantSetupError(t, r, "Codecs with a nil set")
+}
