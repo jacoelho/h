@@ -1,0 +1,12 @@
+version: "2"
+
+linters:
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        json-v2-only:
+          deny:
+            - pkg: "encoding/json$"
+              desc: "use encoding/json/v2 (and encoding/json/jsontext)"
