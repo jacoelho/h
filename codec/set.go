@@ -31,16 +31,18 @@ type encodingReg struct {
 // NewSet returns an empty Set.
 func NewSet() *Set { return &Set{} }
 
-// Default returns a Set decoding and encoding JSON (application/json, and
-// application/*+json for decoding) and text (text/plain).
-func Default() *Set {
+// Default returns a Set decoding and encoding JSON with j (application/json,
+// and application/*+json for decoding) and text (text/plain). Pass
+// JSON{} for json/v2's defaults, or set RejectUnknownFields or Options;
+// j is used for both reading and writing.
+func Default(j JSON) *Set {
 	return &Set{
 		decoders: []decoding{
-			{dec: JSON{}, ranges: []media.Type{{Main: "application", Sub: "json"}, {Main: "application", Sub: "*+json"}}},
+			{dec: j, ranges: []media.Type{{Main: "application", Sub: "json"}, {Main: "application", Sub: "*+json"}}},
 			{dec: Text{}, ranges: []media.Type{{Main: "text", Sub: "plain"}}},
 		},
 		encoders: []encodingReg{
-			{enc: JSON{}, name: "application/json", typ: media.Type{Main: "application", Sub: "json"}},
+			{enc: j, name: "application/json", typ: media.Type{Main: "application", Sub: "json"}},
 			{enc: Text{}, name: "text/plain; charset=utf-8", typ: media.Type{Main: "text", Sub: "plain"}},
 		},
 	}

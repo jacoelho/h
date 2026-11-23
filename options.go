@@ -71,7 +71,8 @@ func Produces(mediaRanges ...string) Option {
 }
 
 // Consumes narrows the media types a route reads to those matched by the
-// given ranges. A RawBody route must set it.
+// given ranges. A RawBody route must set it; "*/*" accepts any body. A body
+// without a Content-Type is matched as application/octet-stream.
 func Consumes(mediaRanges ...string) Option {
 	return Option{apply: func(l *level) error { l.consumes = slices.Clone(mediaRanges); return nil }}
 }

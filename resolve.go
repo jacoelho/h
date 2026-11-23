@@ -66,16 +66,24 @@ func (rs *resolver) mapped(err error) (p problem.Problem, ok bool, perr error) {
 }
 
 // resolve returns the problem for err and the error to report, which adds
-// ErrInvalidProblem when a mapper's answer was discarded.
+// ErrInvalidProblem when a mapper's answer was discarded. A problem of type
+// about:blank without a title gets the status's reason phrase, so formats
+// and OnError see the title the client reads.
 func (rs *resolver) resolve(req *http.Request, err error) (problem.Problem, error) {
+	p, report := rs.classify(req, err)
+	p.Title = p.TitleOrStatus()
+	return p, report
+}
+
+func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, error) {
 	if pe, ok := errors.AsType[*ParamsError](err); ok {
-		return rs.present(err, pe.problem())
+		return rs.present(err, pe, pe.problem())
 	}
 	if re, ok := errors.AsType[*RequestError](err); ok {
 		if re.Status < 400 || re.Status > 599 {
 			return internalProblem(), errors.Join(err, fmt.Errorf("%w: RequestError status %d", ErrInvalidProblem, re.Status))
 		}
-		return rs.present(err, problem.Problem{Status: re.Status})
+		return rs.present(err, re, problem.Problem{Status: re.Status})
 	}
 	p, ok, perr := rs.mapped(err)
 	if perr != nil {
@@ -96,9 +104,12 @@ func (rs *resolver) resolve(req *http.Request, err error) (problem.Problem, erro
 	return internalProblem(), err
 }
 
-// present lets mappers describe an error whose status the router fixes.
-func (rs *resolver) present(err error, fixed problem.Problem) (problem.Problem, error) {
-	p, ok, perr := rs.mapped(err)
+// present lets mappers describe cause, an error whose status the router
+// fixes, and reports err, the chain it arrived in. Mappers see only cause:
+// the chain around it, such as a decoder wrapping a body read failure,
+// describes a different status.
+func (rs *resolver) present(err, cause error, fixed problem.Problem) (problem.Problem, error) {
+	p, ok, perr := rs.mapped(cause)
 	if perr != nil {
 		return fixed, errors.Join(err, perr)
 	}

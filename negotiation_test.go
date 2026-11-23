@@ -91,7 +91,7 @@ func TestRequestBodyRefusals(t *testing.T) {
 }
 
 func TestProducesNarrowsEncoders(t *testing.T) {
-	codecs := codec.Default()
+	codecs := codec.Default(codec.JSON{})
 	if err := codecs.Encodes(codec.NDJSON{}, "application/x-ndjson"); err != nil {
 		t.Fatal(err)
 	}

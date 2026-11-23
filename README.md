@@ -90,7 +90,7 @@ An endpoint has the type `h.Endpoint[In, Out]`. `In` is the request body and `Ou
 
 There are three ways to write one:
 
-- **A plain function.** Write the full signature yourself when you need the request, such as for `req.Link` or response headers.
+- **A plain function.** Write the full signature yourself when you need the request or choose the response, such as `req.Link`, a 201 with `Location`, or a `Content-Disposition` field. `h.Func` and `h.Bind` always answer 200, or 204 for `h.Empty`.
 - **`h.Func(f)`.** Lifts `func(ctx, In) (Out, error)` when the input is the whole body. It answers 200, or 204 when `Out` is `h.Empty`.
 - **`h.Bind(bind, f)`.** Lifts a domain function whose input you build from the body and the path, query and header values.
 
@@ -175,7 +175,39 @@ func TestOrderErrorsAreValid(t *testing.T) {
 
 A problem that `problem.As` or `problem.Func` computes is checked only at request time. If it is invalid, the router answers 500 and reports `h.ErrInvalidProblem`.
 
-Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. `problem.Text` is always the last resort. `problem.Read` decodes a problem body, for clients and tests.
+The router refuses some requests itself, with a `*h.RequestError` whose status is fixed:
+
+- 400, 408 or 413 for a malformed, slow or oversized body
+- 415 for a `Content-Type` the route does not read
+- 406 for an `Accept` it cannot satisfy
+- 403 for a refused cross-origin request (`h.ErrCrossOrigin`)
+- with `Fallback`, 404 (`h.ErrNoRoute`) and 405 (`h.ErrMethodNotAllowed`)
+
+Mappers can describe these problems, for example with a stable code for clients, but must keep the status. A malformed body arrives as a `*codec.DecodeError`. For JSON it wraps json/v2's `*json.SemanticError`, whose `JSONPointer` names the field, or a `*jsontext.SyntacticError`. For a body that is too large or too slow, mappers are offered only the `*h.RequestError`, never the decoder error around it, so the order of these two mappers does not matter:
+
+```go
+var RequestErrors = problem.Map(
+	problem.As(func(e *codec.DecodeError) problem.Problem {
+		p := problem.Problem{Status: http.StatusBadRequest, Title: "Malformed body"}
+		if se, ok := errors.AsType[*json.SemanticError](e); ok && se.JSONPointer != "" {
+			p.Extra = map[string]any{"pointer": string(se.JSONPointer)}
+		}
+		return p
+	}),
+	problem.As(func(e *h.RequestError) problem.Problem {
+		p := problem.Problem{Status: e.Status}
+		switch {
+		case errors.Is(e, h.ErrNoRoute):
+			p.Extra = map[string]any{"code": "no_route"}
+		case e.Status == http.StatusRequestEntityTooLarge:
+			p.Extra = map[string]any{"code": "body_too_large"}
+		}
+		return p
+	}),
+)
+```
+
+Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. `problem.Text` is always the last resort. A format and `OnError` receive the status's reason phrase as the title of a problem that has none. `problem.Read` decodes a problem body, for clients and tests.
 
 ## Read forms, uploads and sequences
 
@@ -185,7 +217,7 @@ The type of `In` selects how the body is read:
 |---|---|---|
 | a struct or other value | decoded by a codec chosen from `Content-Type` | JSON and `text/plain` by default |
 | `h.Form` | `application/x-www-form-urlencoded` or `multipart/form-data` | read values with `req.Body().Parse`; temporary files are removed after the request |
-| `h.RawBody` | the bytes as sent | the route must set `h.Consumes` |
+| `h.RawBody` | the bytes as sent | the route must set `h.Consumes`; `"*/*"` accepts any body |
 | `h.Seq[T]` | a JSON array or NDJSON, read one element at a time | range over `req.Body().All()` |
 
 ```go
@@ -202,6 +234,8 @@ r.Post("/photos", func(ctx context.Context, req h.Request[h.RawBody]) (h.Respons
 
 An endpoint taking `h.RawBody` or `h.Seq[T]` may keep reading the body after its response has started, such as when it streams one output element per input element. Reading the body is bounded by `MaxBody`. A body that is malformed, too large or too slow is answered with 400, 413 or 408. For `h.RawBody` and `h.Seq[T]`, which the endpoint reads itself, that happens when the endpoint returns the read error.
 
+A body sent without `Content-Type` is matched as `application/octet-stream`, as RFC 9110 allows. `RawBody.ContentType` still returns the empty string, so the endpoint can tell that the client named no type.
+
 ## Stream a response
 
 Return `h.Seq[T]` to write a JSON array or NDJSON element by element. The router ranges over the source after the endpoint returns, so the source must honour its context:
@@ -212,7 +246,20 @@ orders.Get("/export", func(ctx context.Context, _ h.Request[h.Empty]) (h.Respons
 })
 ```
 
-NDJSON is not in the default codec set. Register it with `codec.Set.Encodes` and `Decodes`, and pass the set as `Config.Codecs`.
+NDJSON is not in the default codec set. Register it with `codec.Set.Encodes` and `Decodes`, and pass the set as `Config.Codecs`. Another JSON media type works the same way. This download is JSON-LD with object members in a fixed order:
+
+```go
+codecs := codec.Default(codec.JSON{})
+ld := codec.JSON{Options: []json.Options{json.Deterministic(true)}}
+if err := codecs.Encodes(ld, "application/ld+json"); err != nil {
+	log.Fatal(err)
+}
+
+r.Get("/orders.jsonld", func(ctx context.Context, _ h.Request[h.Empty]) (h.Response[h.Seq[Order]], error) {
+	return h.OK(h.Items(svc.All(ctx))).
+		WithHeader("Content-Disposition", `attachment; filename="orders.jsonld"`), nil
+}, h.Produces("application/ld+json"))
+```
 
 Return `h.Stream` to write bytes in a content type of your own:
 
@@ -261,6 +308,8 @@ Options apply to a group or a single route. The closest setting wins:
 | `h.Errors(m)` | none | adds a mapper |
 | `h.ProblemFormats(fs...)` | `Config.ProblemFormats` | formats for this scope's problems |
 | `h.Use(mw...)` | none | middleware for this scope |
+
+`Config.Codecs` holds the codecs every route negotiates between, `codec.Default(codec.JSON{})` when nil. To refuse JSON objects with members no field matches, pass `codec.Default(codec.JSON{RejectUnknownFields: true})`. The same codec writes responses, so its `Options` apply to both directions.
 
 ## Set time limits
 
@@ -316,7 +365,14 @@ mux := http.NewServeMux()
 mux.Handle(r.Mount(), handler) // "/shop/" for BasePath "/shop"
 ```
 
-Call `r.Fallback()` to answer unmatched paths under the router with problems: 405 with `Allow` when the path has routes for other methods, otherwise 404.
+Call `r.Fallback()` to answer unmatched paths under the router with problems: 405 with `Allow` when the path has routes for other methods, otherwise 404. Without it, those requests get net/http's plain-text answers.
+
+To serve a single-page app under the same base path as the API, register it as a catch-all route. The mux picks the most specific pattern, so API routes still win:
+
+```go
+r.Get("/api/orders", listOrders)
+r.Handle("GET", "/{path...}", h.Raw(app.ServeHTTP)) // every other GET, such as /shop/recipes/42
+```
 
 ## Catch setup mistakes
 

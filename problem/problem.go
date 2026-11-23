@@ -24,7 +24,8 @@ type Problem struct {
 	// (the default when empty), which means the status says all there is.
 	Type string
 	// Title is a short summary of the kind of problem. When empty and Type is
-	// "about:blank", writers use the status's reason phrase.
+	// "about:blank", the h router and the RFC 9457 and text formats use the
+	// status's reason phrase.
 	Title string
 	// Detail explains this occurrence to a person.
 	Detail string
