@@ -639,3 +639,14 @@ func TestEndpointCanReturnAProblem(t *testing.T) {
 		t.Fatalf("OnError got %v, want ErrInvalidProblem", log.Last(t).Err)
 	}
 }
+
+func TestEmptyGroupPrefixAppliesOnlyOptions(t *testing.T) {
+	errOutOfStock := errors.New("out of stock")
+	r := newRouter(t, h.Config{})
+	orders := r.Group("", h.Errors(problem.Is(errOutOfStock, problem.Problem{Status: http.StatusConflict})))
+	orders.Get("/orders", failing(errOutOfStock))
+	r.Get("/other", failing(errOutOfStock))
+	c := htest.New(t, r)
+	c.Do("GET", "/orders", nil).Expect(t, http.StatusConflict)
+	c.Do("GET", "/other", nil).Expect(t, http.StatusInternalServerError)
+}

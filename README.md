@@ -108,6 +108,8 @@ orders.Post("/", func(ctx context.Context, req h.Request[NewOrder]) (h.Response[
 })
 ```
 
+To share options without a prefix, use an empty one: `r.Group("", h.Errors(OrderErrors))`.
+
 Responses are values: `h.OK`, `h.Created`, `h.Accepted`, `h.NoContent`, `h.NotModified` and `h.Status`. Add header fields with `WithHeader`. The router owns `Content-Type`, `Content-Length` and the CORS fields, so a response that sets them is answered with 500.
 
 ## Read path, query and header values
@@ -354,10 +356,10 @@ To exempt one route that other sites must reach, such as a single sign-on callba
 
 ## Add middleware, request data and logging
 
-`r.Use` on the root router wraps every request, including unmatched ones. On a group, it wraps that group's routes. Package `mw` provides `RequestID`, `AccessLog` and `Timeout`:
+`r.Use` on the root router wraps every request, including unmatched ones. On a group, it wraps that group's routes. Package `mw` provides `RequestID`, `AccessLog` and `Timeout`. `AccessLog` writes one line per request to the logger you pass, at the level you pass:
 
 ```go
-r.Use(mw.RequestID("X-Request-Id"), mw.AccessLog(logger), mw.Timeout(10*time.Second))
+r.Use(mw.RequestID("X-Request-Id"), mw.AccessLog(logger, slog.LevelInfo), mw.Timeout(10*time.Second))
 ```
 
 Every problem the router answers is described by an `h.Failure`: the `Request`, the `Err` that caused it, and the `Problem` the client is sent. Two hooks receive it.

@@ -46,13 +46,13 @@ func TestRequestID(t *testing.T) {
 
 func TestAccessLog(t *testing.T) {
 	var buf bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&buf, nil))
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /items/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("hello"))
 	})
-	handler := mw.RequestID("X-Request-Id")(mw.AccessLog(log)(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	handler := mw.RequestID("X-Request-Id")(mw.AccessLog(log, slog.LevelDebug)(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		_, req.Pattern = mux.Handler(req)
 		mux.ServeHTTP(w, req)
 	})))
@@ -60,7 +60,7 @@ func TestAccessLog(t *testing.T) {
 	req.Header.Set("X-Request-Id", "r1")
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 	line := buf.String()
-	for _, want := range []string{"method=GET", `pattern="GET /items/{id}"`, "path=/items/7", "status=418", "bytes=5", "request_id=r1"} {
+	for _, want := range []string{"level=DEBUG", "method=GET", `pattern="GET /items/{id}"`, "path=/items/7", "status=418", "bytes=5", "request_id=r1"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("log line %q lacks %s", line, want)
 		}
@@ -69,7 +69,7 @@ func TestAccessLog(t *testing.T) {
 
 func TestAccessLogWriterSupportsResponseController(t *testing.T) {
 	var flushErr error
-	handler := mw.AccessLog(slog.New(slog.DiscardHandler))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := mw.AccessLog(slog.New(slog.DiscardHandler), slog.LevelInfo)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		flushErr = http.NewResponseController(w).Flush()
 	}))
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
