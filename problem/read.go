@@ -22,6 +22,9 @@ func Read(r io.Reader) (Problem, error) {
 	if err := json.UnmarshalRead(r, &members); err != nil {
 		return Problem{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
+	if members == nil {
+		return Problem{}, fmt.Errorf("%w: not a JSON object", ErrInvalid)
+	}
 	var p Problem
 	if statusRaw, ok := members["status"]; ok {
 		if statusRaw.Kind() != '0' {

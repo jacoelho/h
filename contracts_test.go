@@ -454,10 +454,22 @@ func TestLastProblemFormatAnswersUnmatchedAccept(t *testing.T) {
 }
 
 func TestEmptyProblemFormatsAreRefused(t *testing.T) {
-	if _, err := h.New(h.Config{ProblemFormats: []problem.Format{}}); err == nil {
-		t.Fatal("New accepted an empty ProblemFormats")
+	if _, err := h.New(h.Config{ProblemFormats: []problem.Format{}}); err == nil || !strings.Contains(err.Error(), "Config.ProblemFormats") {
+		t.Fatalf("New = %v, want an error naming Config.ProblemFormats", err)
 	}
 	r := newRouter(t, h.Config{})
 	r.Get("/x", respond(h.OK(item{"a"})), h.ProblemFormats())
 	wantSetupError(t, r, "ProblemFormats with no formats")
+}
+
+func TestDomainMapperSeesParamsErrorWrappedByEndpoint(t *testing.T) {
+	errBadOrder := errors.New("bad order")
+	r := newRouter(t, h.Config{Errors: problem.Is(errBadOrder, problem.Problem{Status: http.StatusBadRequest, Type: "https://example.com/bad-order"})})
+	r.Get("/x", func(_ context.Context, req h.Request[h.Empty]) (h.Response[h.Empty], error) {
+		return h.Response[h.Empty]{}, errors.Join(errBadOrder, req.Parse(func(p *h.Params) { _ = p.Query("n", h.Int64) }))
+	})
+	p := htest.New(t, r).Do("GET", "/x?n=abc", nil).Expect(t, http.StatusBadRequest).Problem(t)
+	if p.Type != "https://example.com/bad-order" {
+		t.Fatalf("problem %+v, want the domain mapper's type", p)
+	}
 }

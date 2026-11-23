@@ -80,7 +80,7 @@ func (rs *resolver) resolve(req *http.Request, err error) (problem.Problem, erro
 
 func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, error) {
 	if pe, ok := errors.AsType[*ParamsError](err); ok {
-		return rs.present(err, pe, pe.problem())
+		return rs.present(err, err, pe.problem())
 	}
 	if re, ok := errors.AsType[*RequestError](err); ok {
 		if re.Status < 400 || re.Status > 599 {
@@ -108,9 +108,9 @@ func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, err
 }
 
 // present lets mappers describe cause, an error whose status the router
-// fixes, and reports err, the chain it arrived in. Mappers see only cause:
-// the chain around it, such as a decoder wrapping a body read failure,
-// describes a different status.
+// fixes, and reports err, the chain it arrived in. For a RequestError,
+// cause is the RequestError alone: the chain around it, such as a decoder
+// wrapping a body read failure, describes a different status.
 func (rs *resolver) present(err, cause error, fixed problem.Problem) (problem.Problem, error) {
 	p, ok, perr := rs.mapped(cause)
 	if perr != nil {
