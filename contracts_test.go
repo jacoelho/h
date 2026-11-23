@@ -3,6 +3,7 @@ package h_test
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -39,7 +40,7 @@ func TestCrossOriginExemptionCoversOnlyItsRoute(t *testing.T) {
 
 func TestCrossOriginRefusalUsesTheRoutesMappers(t *testing.T) {
 	r := newRouter(t, h.Config{})
-	g := r.Group("/api", h.Errors(problem.Is(h.ErrCrossOrigin, problem.Problem{Status: 403, Title: "Cross-site request refused"})))
+	g := r.Group("/api", h.RequestErrors(problem.Is(h.ErrCrossOrigin, problem.Problem{Status: 403, Title: "Cross-site request refused"})))
 	g.Post("/x", h.Func(func(context.Context, item) (item, error) { return item{}, nil }))
 	p := htest.New(t, r).Do("POST", "/api/x", item{"x"}, htest.Header("Sec-Fetch-Site", "cross-site")).Expect(t, http.StatusForbidden).Problem(t)
 	if p.Title != "Cross-site request refused" {
@@ -384,7 +385,7 @@ func TestFallbackProblemsCarryTitleAndMatchableCause(t *testing.T) {
 	r := newRouter(t, h.Config{
 		OnError:        log.OnError,
 		ProblemFormats: []problem.Format{shape},
-		Errors:         problem.Is(h.ErrNoRoute, problem.Problem{Status: http.StatusNotFound, Title: "No such page"}),
+		RequestErrors:  problem.Is(h.ErrNoRoute, problem.Problem{Status: http.StatusNotFound, Title: "No such page"}),
 	})
 	r.Get("/x", respond(h.OK(item{"a"})))
 	r.Fallback()
@@ -462,21 +463,23 @@ func TestEmptyProblemFormatsAreRefused(t *testing.T) {
 	wantSetupError(t, r, "ProblemFormats with no formats")
 }
 
-func TestDomainMapperSeesParamsErrorWrappedByEndpoint(t *testing.T) {
+func TestRequestErrorsMapperSeesErrorJoinedWithParamsError(t *testing.T) {
 	errBadOrder := errors.New("bad order")
-	r := newRouter(t, h.Config{Errors: problem.Is(errBadOrder, problem.Problem{Status: http.StatusBadRequest, Type: "https://example.com/bad-order"})})
+	r := newRouter(t, h.Config{RequestErrors: problem.Is(errBadOrder, problem.Problem{Status: http.StatusBadRequest, Type: "https://example.com/bad-order"})})
 	r.Get("/x", func(_ context.Context, req h.Request[h.Empty]) (h.Response[h.Empty], error) {
 		return h.Response[h.Empty]{}, errors.Join(errBadOrder, req.Parse(func(p *h.Params) { _ = p.Query("n", h.Int64) }))
 	})
 	p := htest.New(t, r).Do("GET", "/x?n=abc", nil).Expect(t, http.StatusBadRequest).Problem(t)
 	if p.Type != "https://example.com/bad-order" {
-		t.Fatalf("problem %+v, want the domain mapper's type", p)
+		t.Fatalf("problem %+v, want the RequestErrors mapper's type", p)
 	}
 }
 
 func TestContextEndingIsAnsweredByTheRouter(t *testing.T) {
 	notFound := errors.New("not found")
-	catchAll := problem.Func(func(error) (problem.Problem, bool) { return problem.Problem{Status: http.StatusInternalServerError}, true })
+	catchAll := problem.Func(func(error) (problem.Problem, bool) {
+		return problem.Problem{Status: http.StatusInternalServerError}, true
+	})
 	r := newRouter(t, h.Config{Errors: problem.Map(problem.Is(notFound, problem.Problem{Status: http.StatusNotFound}), catchAll)})
 	after := func(fail func(ctx context.Context) error) h.Endpoint[h.Empty, h.Empty] {
 		return func(ctx context.Context, _ h.Request[h.Empty]) (h.Response[h.Empty], error) {
@@ -507,5 +510,50 @@ func TestContextEndingIsAnsweredByTheRouter(t *testing.T) {
 			t.Errorf("GET %s (cancelled %v): %d, want %d", tc.path, tc.cancel, got, tc.want)
 		}
 		stop()
+	}
+}
+
+type servings int
+
+type fieldError struct{ field string }
+
+func (e *fieldError) Error() string { return "invalid " + e.field }
+
+func (s *servings) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
+	if _, err := dec.ReadValue(); err != nil {
+		return err
+	}
+	return &fieldError{field: "servings"}
+}
+
+func TestCatchAllErrorsMapperNeverSeesRefusals(t *testing.T) {
+	var log htest.Errors
+	var offered []error
+	r := newRouter(t, h.Config{OnError: log.OnError, Errors: problem.Func(func(err error) (problem.Problem, bool) {
+		offered = append(offered, err)
+		return problem.Problem{Status: http.StatusInternalServerError}, true
+	})})
+	r.Post("/items", echo(nil))
+	r.Fallback()
+	c := htest.New(t, r)
+	c.Do("GET", "/nope", nil).Expect(t, http.StatusNotFound)
+	c.Do("POST", "/items", "x", htest.Header("Content-Type", "text/xml")).Expect(t, http.StatusUnsupportedMediaType)
+	if len(offered) != 0 || errors.Is(log.Last(t).Err, h.ErrInvalidProblem) {
+		t.Fatalf("catch-all offered %v; OnError got %v", offered, log.Last(t).Err)
+	}
+}
+
+func TestGroupRequestErrorsTurnAFieldErrorInsideABadBodyInto422(t *testing.T) {
+	type recipe struct {
+		Servings servings `json:"servings"`
+	}
+	r := newRouter(t, h.Config{})
+	recipes := r.Group("/recipes", h.RequestErrors(problem.As(func(e *fieldError) problem.Problem {
+		return problem.Problem{Status: http.StatusUnprocessableEntity, Extra: map[string]any{"field": e.field}}
+	})))
+	recipes.Post("/new", h.Func(func(_ context.Context, in recipe) (recipe, error) { return in, nil }))
+	p := htest.New(t, r).Do("POST", "/recipes/new", `{"servings":2}`, htest.Header("Content-Type", "application/json")).Expect(t, http.StatusUnprocessableEntity).Problem(t)
+	if p.Extra["field"] != "servings" {
+		t.Fatalf("problem %+v", p)
 	}
 }
