@@ -183,7 +183,9 @@ The router refuses some requests itself, with a `*h.RequestError` whose status i
 - 403 for a refused cross-origin request (`h.ErrCrossOrigin`)
 - with `Fallback`, 404 (`h.ErrNoRoute`) and 405 (`h.ErrMethodNotAllowed`)
 
-Mappers can describe these problems, for example with a stable code for clients, but must keep the status. A malformed body arrives as a `*codec.DecodeError`. For JSON it wraps json/v2's `*json.SemanticError`, whose `JSONPointer` names the field, or a `*jsontext.SyntacticError`. For a body that is too large or too slow, mappers are offered only the `*h.RequestError`, never the decoder error around it. The order of these two mappers does not matter:
+Mappers can describe these problems, for example with a stable code for clients, but must keep the status. A malformed body read by a codec, including a `Seq` element, is a `*h.RequestError` wrapping a `*codec.DecodeError`. For JSON values that error wraps json/v2's `*json.SemanticError`, whose `JSONPointer` names the field, or a `*jsontext.SyntacticError`. A malformed form is a `*h.RequestError` wrapping the `net/url` or `mime/multipart` error. For a body that is too large or too slow, mappers are offered only the `*h.RequestError`, never the decoder error around it.
+
+List a `*codec.DecodeError` mapper before a `*h.RequestError` mapper, since a malformed body matches both:
 
 ```go
 var RequestErrors = problem.Map(
@@ -217,7 +219,7 @@ The type of `In` selects how the body is read:
 |---|---|---|
 | a struct or other value | decoded by a codec chosen from `Content-Type` | JSON and `text/plain` by default |
 | `h.Form` | `application/x-www-form-urlencoded` or `multipart/form-data` | read values with `req.Body().Parse`; temporary files are removed after the request |
-| `h.RawBody` | the bytes as sent | the route must set `h.Consumes`; `"*/*"` accepts any body |
+| `h.RawBody` | the bytes as sent | the route must set `h.Consumes`; `"*/*"` accepts any valid `Content-Type`, or none |
 | `h.Seq[T]` | a JSON array or NDJSON, read one element at a time | range over `req.Body().All()` |
 
 ```go
@@ -367,7 +369,7 @@ mux.Handle(r.Mount(), handler) // "/shop/" for BasePath "/shop"
 
 Call `r.Fallback()` to answer unmatched paths under the router with problems: 405 with `Allow` when the path has routes for other methods, otherwise 404. Without it, those requests get net/http's plain-text answers.
 
-To serve a single-page app under the same base path as the API, register it as a catch-all route. The mux picks the most specific pattern, so API routes still win:
+To serve a single-page app under the same base path as the API, register it as a catch-all route. The mux picks the most specific pattern, so API routes still win. The catch-all also answers unknown API paths: a GET gets the app, and other methods get 405. To answer those with 404, serve the app under its own prefix, such as `/app/{path...}`:
 
 ```go
 r.Get("/api/orders", listOrders)

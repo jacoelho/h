@@ -22,8 +22,9 @@ type Format interface {
 // type, title, status, detail and the extension members.
 var RFC9457 Format = rfc9457{}
 
-// Text writes the problem's title as text/plain. It is the format of last
-// resort, so it never fails for a valid Problem.
+// Text writes the problem's title as text/plain. The h router also writes
+// it when the negotiated format fails, so it never fails for a valid
+// Problem.
 var Text Format = text{}
 
 type rfc9457 struct{}

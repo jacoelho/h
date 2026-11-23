@@ -153,7 +153,7 @@ func New(cfg Config) (*Router, error) {
 		return nil, err
 	}
 	if _, err := newResolver(nil, cfg.ProblemFormats, nil); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("h: Config.ProblemFormats: %w", err)
 	}
 	return &Router{core: c}, nil
 }

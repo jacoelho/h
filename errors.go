@@ -41,8 +41,10 @@ var (
 
 // RequestError is a request the router refuses with a fixed status: a body
 // that is too large (413), malformed (400) or too slow (408), or in a media
-// type the route does not read (415), or an Accept field it cannot satisfy
-// (406). The router returns it from the boundaries it owns, such as the body
+// type the route does not read (415), an Accept field it cannot satisfy
+// (406), a refused cross-origin request (403, ErrCrossOrigin), or, with
+// Fallback, a path no route matches (404, ErrNoRoute) or a method it does
+// not serve (405, ErrMethodNotAllowed). The router returns it from the boundaries it owns, such as the body
 // reader, so an error the endpoint produces itself is never mistaken for
 // one. Mappers may present it but not change its status, and are offered
 // the RequestError alone: errors wrapped around it, by a decoder or an
