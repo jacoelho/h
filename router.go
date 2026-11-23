@@ -34,6 +34,9 @@ type Config struct {
 	// Errors translates errors no route or group mapper knows. The zero
 	// Mapper knows none.
 	Errors problem.Mapper
+	// RequestErrors describes the requests the router refuses itself when
+	// no route or group mapper does; see the RequestErrors option.
+	RequestErrors problem.Mapper
 	// Codecs are the codecs routes negotiate between; nil means
 	// codec.Default(codec.JSON{}). Use codec.Default(codec.JSON{
 	// RejectUnknownFields: true}) to refuse unknown object members.
@@ -118,6 +121,9 @@ func New(cfg Config) (*Router, error) {
 	if err := cfg.Errors.Err(); err != nil {
 		return nil, fmt.Errorf("h: Config.Errors: %w", err)
 	}
+	if err := cfg.RequestErrors.Err(); err != nil {
+		return nil, fmt.Errorf("h: Config.RequestErrors: %w", err)
+	}
 	if cfg.Codecs == nil {
 		cfg.Codecs = codec.Default(codec.JSON{})
 	}
@@ -152,7 +158,7 @@ func New(cfg Config) (*Router, error) {
 	if c.cors, err = newCORSPolicy(cfg.TrustedOrigins, cfg.CORS); err != nil {
 		return nil, err
 	}
-	if _, err := newResolver(nil, cfg.ProblemFormats, nil); err != nil {
+	if _, err := newResolver(mapping{}, cfg.ProblemFormats, nil); err != nil {
 		return nil, fmt.Errorf("h: Config.ProblemFormats: %w", err)
 	}
 	return &Router{core: c}, nil
@@ -422,10 +428,11 @@ func (r *Router) resolve(own level) (resolved, error) {
 	}
 	slices.Reverse(levels)
 	levels = append(levels, own)
-	var mappers []problem.Mapper
+	var m mapping
 	formats := cfg.ProblemFormats
 	for _, l := range levels {
-		mappers = append(slices.Clone(l.mappers), mappers...)
+		m.domain = append(slices.Clone(l.mappers), m.domain...)
+		m.refusals = append(slices.Clone(l.refusals), m.refusals...)
 		if l.formats != nil {
 			formats = l.formats
 		}
@@ -447,8 +454,9 @@ func (r *Router) resolve(own level) (resolved, error) {
 		res.use = append(res.use, l.use...)
 		res.bypass = l.bypass
 	}
-	mappers = append(mappers, cfg.Errors)
-	rs, err := newResolver(mappers, formats, cfg.OnError)
+	m.domain = append(m.domain, cfg.Errors)
+	m.refusals = append(m.refusals, cfg.RequestErrors)
+	rs, err := newResolver(m, formats, cfg.OnError)
 	if err != nil {
 		return resolved{}, err
 	}

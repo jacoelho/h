@@ -161,7 +161,7 @@ The mapper constructors are:
 
 The route's mappers are tried first, then its groups', then `Config.Errors`.
 
-An error no mapper knows is answered with 500. Its text goes only to `Config.OnError`, never to the client. A panic in an endpoint is answered with 500 and reported as `h.ErrPanic`. When the client has gone, the router answers 499. When the request's deadline passed, it answers 503.
+An error no mapper knows is answered with 500. Its text goes only to `Config.OnError`, never to the client. A panic in an endpoint is answered with 500 and reported as `h.ErrPanic`. An error that wraps the request's own context error is answered by the router, without mappers: 499 when the client has gone, 503 when the request's deadline passed.
 
 A mapper with a fixed problem is checked when it is built. Assert that in the capability's own tests:
 
@@ -175,7 +175,7 @@ func TestOrderErrorsAreValid(t *testing.T) {
 
 A problem that `problem.As` or `problem.Func` computes is checked only at request time. If it is invalid, the router answers 500 and reports `h.ErrInvalidProblem`.
 
-The router refuses some requests itself, with a `*h.RequestError` whose status is fixed:
+The router refuses some requests itself, with a `*h.RequestError`:
 
 - 400, 408 or 413 for a malformed, slow or oversized body
 - 415 for a `Content-Type` the route does not read
@@ -183,12 +183,14 @@ The router refuses some requests itself, with a `*h.RequestError` whose status i
 - 403 for a refused cross-origin request (`h.ErrCrossOrigin`)
 - with `Fallback`, 404 (`h.ErrNoRoute`) and 405 (`h.ErrMethodNotAllowed`)
 
-Mappers can describe these problems, for example with a stable code for clients, but must keep the status. A malformed body read by a codec, including a `Seq` element, is a `*h.RequestError` wrapping a `*codec.DecodeError`. For JSON values that error wraps json/v2's `*json.SemanticError`, whose `JSONPointer` names the field, or a `*jsontext.SyntacticError`. A malformed form is a `*h.RequestError` wrapping the `net/url` or `mime/multipart` error. For a body that is too large or too slow, mappers are offered only the `*h.RequestError`, never the decoder error around it.
+A path, query or header value that fails `Parse` is a `*h.ParamsError`, answered with 400, or 404 for a path value.
+
+These refusals never reach `Errors` mappers, so a catch-all mapper cannot turn a 404 into a 500. Describe them with `Config.RequestErrors` or the `h.RequestErrors` option on a group or route, which work like `Errors`. A `RequestErrors` mapper may answer any 4xx status, for example 422 for a body your clients consider invalid, or 400 for a malformed path value. Any other status is reported as `h.ErrInvalidProblem`, and the router's status stands. A malformed body read by a codec, including a `Seq` element, is a `*h.RequestError` wrapping a `*codec.DecodeError`. For JSON values that error wraps json/v2's `*json.SemanticError`, whose `JSONPointer` names the field, or a `*jsontext.SyntacticError`. A malformed form is a `*h.RequestError` wrapping the `net/url` or `mime/multipart` error. The mapper is offered the refusal and what it wraps, so it can also match an error your own unmarshaler returned. For a body that is too large or too slow, it is offered only the `*h.RequestError`, never the decoder error around it.
 
 List a `*codec.DecodeError` mapper before a `*h.RequestError` mapper, since a malformed body matches both:
 
 ```go
-var RequestErrors = problem.Map(
+var RefusalProblems = problem.Map(
 	problem.As(func(e *codec.DecodeError) problem.Problem {
 		p := problem.Problem{Status: http.StatusBadRequest, Title: "Malformed body"}
 		if se, ok := errors.AsType[*json.SemanticError](e); ok && se.JSONPointer != "" {
@@ -207,6 +209,8 @@ var RequestErrors = problem.Map(
 		return p
 	}),
 )
+
+r, err := h.New(h.Config{RequestErrors: RefusalProblems})
 ```
 
 Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. The last format listed answers a client whose `Accept` matches none, as RFC 9110 allows. The default list is `problem.RFC9457` then `problem.Text`. A list you set replaces it, so `[]problem.Format{problem.RFC9457}` answers every client with JSON. A format and `OnError` receive the status's reason phrase as the title of an `about:blank` problem that has none. `problem.Read` decodes a problem body, for clients and tests.

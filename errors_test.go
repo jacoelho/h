@@ -126,16 +126,22 @@ func TestMapperPrecedence(t *testing.T) {
 	}
 }
 
-func TestMapperCannotChangeFixedStatus(t *testing.T) {
+func TestRequestErrorsMappersDescribeRefusalsWithA4xxStatus(t *testing.T) {
 	var log htest.Errors
 	r := newRouter(t, h.Config{
 		OnError: log.OnError,
 		MaxBody: 8,
-		Errors: problem.Map(
+		Errors: problem.Func(func(error) (problem.Problem, bool) {
+			return problem.Problem{Status: http.StatusInternalServerError, Title: "catch-all"}, true
+		}),
+		RequestErrors: problem.Map(
 			problem.As(func(*h.ParamsError) problem.Problem { return problem.Problem{Status: 422} }),
 			problem.As(func(e *h.RequestError) problem.Problem {
-				if e.Status == http.StatusRequestEntityTooLarge {
+				switch e.Status {
+				case http.StatusRequestEntityTooLarge:
 					return problem.Problem{Status: 413, Detail: "orders are at most 8 bytes"}
+				case http.StatusUnsupportedMediaType:
+					return problem.Problem{Status: http.StatusInternalServerError}
 				}
 				return problem.Problem{Status: 400, Title: "rewritten"}
 			}),
@@ -146,13 +152,9 @@ func TestMapperCannotChangeFixedStatus(t *testing.T) {
 	})
 	r.Post("/items", echo(nil))
 
-	w := send(t, r, call{method: "GET", target: "/q"})
-	w.Expect(t, http.StatusBadRequest)
-	if !errors.Is(log.Last(t).Err, h.ErrInvalidProblem) {
-		t.Fatalf("OnError got %v, want ErrInvalidProblem", log.Last(t).Err)
-	}
+	send(t, r, call{method: "GET", target: "/q"}).Expect(t, http.StatusUnprocessableEntity)
 
-	w = send(t, r, call{method: "POST", target: "/items", body: `{"name":"long"}`, header: jsonHeader()})
+	w := send(t, r, call{method: "POST", target: "/items", body: `{"name":"long"}`, header: jsonHeader()})
 	w.Expect(t, http.StatusRequestEntityTooLarge)
 	if d := w.Problem(t).Detail; d != "orders are at most 8 bytes" {
 		t.Fatalf("detail %v", d)
@@ -161,7 +163,13 @@ func TestMapperCannotChangeFixedStatus(t *testing.T) {
 	w = send(t, r, call{method: "POST", target: "/items", body: `{`, header: jsonHeader()})
 	w.Expect(t, http.StatusBadRequest)
 	if title := w.Problem(t).Title; title != "rewritten" {
-		t.Fatalf("a mapper keeping the fixed status may present it; title %v", title)
+		t.Fatalf("title %v, want the RequestErrors mapper's", title)
+	}
+
+	w = send(t, r, call{method: "POST", target: "/items", body: `x`, header: http.Header{"Content-Type": {"text/xml"}}})
+	w.Expect(t, http.StatusUnsupportedMediaType)
+	if !errors.Is(log.Last(t).Err, h.ErrInvalidProblem) {
+		t.Fatalf("OnError got %v, want ErrInvalidProblem for a 5xx answer", log.Last(t).Err)
 	}
 }
 

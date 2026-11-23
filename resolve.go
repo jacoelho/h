@@ -23,17 +23,24 @@ type OnError func(ctx context.Context, r *http.Request, err error, p problem.Pro
 
 const statusClientClosedRequest = 499
 
-// resolver turns errors into problems for one route or scope: the mappers
-// in the order they are tried, the formats to write problems in, and the
-// observer.
+// mapping holds a scope's mappers in the order they are tried: domain
+// mappers for the errors endpoints return, and refusal mappers for the
+// requests the router refuses itself.
+type mapping struct {
+	domain   []problem.Mapper
+	refusals []problem.Mapper
+}
+
+// resolver turns errors into problems for one route or scope: the mappers,
+// the formats to write problems in, and the observer.
 type resolver struct {
-	mappers []problem.Mapper
+	mapping
 	formats []problem.Format
 	offers  []media.Type
 	onError OnError
 }
 
-func newResolver(mappers []problem.Mapper, formats []problem.Format, onError OnError) (*resolver, error) {
+func newResolver(m mapping, formats []problem.Format, onError OnError) (*resolver, error) {
 	if len(formats) == 0 {
 		return nil, errors.New("h: no problem formats")
 	}
@@ -49,18 +56,18 @@ func newResolver(mappers []problem.Mapper, formats []problem.Format, onError OnE
 		}
 		offers[i] = t
 	}
-	return &resolver{mappers: mappers, formats: fs, offers: offers, onError: onError}, nil
+	return &resolver{mapping: m, formats: fs, offers: offers, onError: onError}, nil
 }
 
-// mapped asks the mappers in order. A mapper that panics answers nothing,
-// and its panic is returned as a *PanicError for the caller to report.
-func (rs *resolver) mapped(err error) (p problem.Problem, ok bool, perr error) {
+// mapped asks mappers in order. A mapper that panics answers nothing, and
+// its panic is returned as a *PanicError for the caller to report.
+func mapped(mappers []problem.Mapper, err error) (p problem.Problem, ok bool, perr error) {
 	defer func() {
 		if v := recover(); v != nil {
 			p, ok, perr = problem.Problem{}, false, panicError(v)
 		}
 	}()
-	for _, m := range rs.mappers {
+	for _, m := range mappers {
 		if p, ok := m.Problem(err); ok {
 			return p, true, nil
 		}
@@ -80,18 +87,18 @@ func (rs *resolver) resolve(req *http.Request, err error) (problem.Problem, erro
 
 func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, error) {
 	if pe, ok := errors.AsType[*ParamsError](err); ok {
-		return rs.present(err, err, pe.problem())
+		return rs.refuse(err, err, pe.problem())
 	}
 	if re, ok := errors.AsType[*RequestError](err); ok {
 		if re.Status < 400 || re.Status > 599 {
 			return internalProblem(), errors.Join(err, fmt.Errorf("%w: RequestError status %d", ErrInvalidProblem, re.Status))
 		}
-		return rs.present(err, re, problem.Problem{Status: re.Status})
+		return rs.refuse(err, re, problem.Problem{Status: re.Status})
 	}
 	if p, ok := cancelled(req, err); ok {
 		return p, err
 	}
-	p, ok, perr := rs.mapped(err)
+	p, ok, perr := mapped(rs.domain, err)
 	if perr != nil {
 		return internalProblem(), errors.Join(err, perr)
 	}
@@ -110,20 +117,21 @@ func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, err
 	return internalProblem(), err
 }
 
-// present lets mappers describe cause, an error whose status the router
-// fixes, and reports err, the chain it arrived in. For a RequestError,
-// cause is the RequestError alone: the chain around it, such as a decoder
-// wrapping a body read failure, describes a different status.
-func (rs *resolver) present(err, cause error, fixed problem.Problem) (problem.Problem, error) {
-	p, ok, perr := rs.mapped(cause)
+// refuse answers a request the router refuses, offering cause to the
+// refusal mappers and reporting err, the chain it arrived in. For a
+// RequestError, cause is the RequestError and what it wraps, not the chain
+// around it, such as a decoder wrapping a body read failure. A mapper may
+// answer any 4xx status; otherwise fixed stands.
+func (rs *resolver) refuse(err, cause error, fixed problem.Problem) (problem.Problem, error) {
+	p, ok, perr := mapped(rs.refusals, cause)
 	if perr != nil {
 		return fixed, errors.Join(err, perr)
 	}
 	if !ok {
 		return fixed, err
 	}
-	if p.Status != fixed.Status {
-		return fixed, errors.Join(err, fmt.Errorf("%w: status %d for an error the router answers with %d", ErrInvalidProblem, p.Status, fixed.Status))
+	if p.Status < 400 || p.Status > 499 {
+		return fixed, errors.Join(err, fmt.Errorf("%w: status %d for a refused request; want 4xx", ErrInvalidProblem, p.Status))
 	}
 	if verr := p.Validate(); verr != nil {
 		return fixed, errors.Join(err, fmt.Errorf("%w: %w", ErrInvalidProblem, verr))

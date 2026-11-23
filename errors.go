@@ -46,9 +46,10 @@ var (
 // Fallback, a path no route matches (404, ErrNoRoute) or a method it does
 // not serve (405, ErrMethodNotAllowed). The router returns it from the boundaries it owns, such as the body
 // reader, so an error the endpoint produces itself is never mistaken for
-// one. Mappers may present it but not change its status, and are offered
-// the RequestError alone: errors wrapped around it, by a decoder or an
-// endpoint, are reported to OnError but not matched.
+// one. RequestErrors mappers describe it and may choose another 4xx
+// status; they are offered the RequestError and what it wraps, while errors
+// wrapped around it, by a decoder or an endpoint, are reported to OnError
+// but not matched. Errors mappers are never offered it.
 type RequestError struct {
 	Status int
 	Err    error

@@ -19,6 +19,7 @@ type Option struct {
 // level holds the settings one router, group or route sets itself.
 type level struct {
 	mappers   []problem.Mapper
+	refusals  []problem.Mapper
 	formats   []problem.Format
 	produces  []string
 	consumes  []string
@@ -30,13 +31,32 @@ type level struct {
 }
 
 // Errors adds m to the mappers that translate a route's errors into
-// problems. Mappers closer to the route are tried first.
+// problems. Mappers closer to the route are tried first. They are never
+// offered the requests the router refuses itself: see RequestErrors.
 func Errors(m problem.Mapper) Option {
 	return Option{apply: func(l *level) error {
 		if err := m.Err(); err != nil {
 			return fmt.Errorf("Errors: %w", err)
 		}
 		l.mappers = append(l.mappers, m)
+		return nil
+	}}
+}
+
+// RequestErrors adds m to the mappers that describe the requests the
+// router refuses itself: a *RequestError, such as a malformed body (400) or
+// an unsupported media type (415), and a *ParamsError. m is offered the
+// error as the endpoint or router returned it, so it can match an error
+// wrapped inside, such as a field error from a custom unmarshaler. It may
+// answer any 4xx status; any other answer is reported as ErrInvalidProblem
+// and the router's status stands. Mappers closer to the route are tried
+// first.
+func RequestErrors(m problem.Mapper) Option {
+	return Option{apply: func(l *level) error {
+		if err := m.Err(); err != nil {
+			return fmt.Errorf("RequestErrors: %w", err)
+		}
+		l.refusals = append(l.refusals, m)
 		return nil
 	}}
 }
