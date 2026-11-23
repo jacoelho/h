@@ -574,11 +574,13 @@ func Raw(fn func(http.ResponseWriter, *http.Request)) func(http.ResponseWriter, 
 
 var (
 	// ErrNoRoute is the cause of the 404 that Fallback answers for a path
-	// no route matches. Mappers can match it to describe that problem.
+	// no route matches. RequestErrors mappers can match it to describe
+	// that problem.
 	ErrNoRoute = errors.New("h: no route")
 	// ErrMethodNotAllowed is the cause of the 405 that Fallback answers for
-	// a path whose routes serve other methods. Mappers can match it to
-	// describe that problem.
+	// a path whose routes serve other methods. RequestErrors mappers can
+	// match it to describe that problem; Allow is sent while the status
+	// stays 405.
 	ErrMethodNotAllowed = errors.New("h: method not allowed")
 )
 
@@ -597,11 +599,13 @@ func (r *Router) Fallback() {
 			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				if methods := c.allowed(req); len(methods) > 0 {
 					p, report := res.resolver.resolve(req, &RequestError{Status: http.StatusMethodNotAllowed, Err: ErrMethodNotAllowed})
-					p.Header = p.Header.Clone()
-					if p.Header == nil {
-						p.Header = http.Header{}
+					if p.Status == http.StatusMethodNotAllowed {
+						p.Header = p.Header.Clone()
+						if p.Header == nil {
+							p.Header = http.Header{}
+						}
+						p.Header.Set("Allow", strings.Join(methods, ", "))
 					}
-					p.Header.Set("Allow", strings.Join(methods, ", "))
 					res.resolver.observe(req, report, p)
 					res.resolver.write(w, req, p)
 					return
@@ -686,8 +690,7 @@ func (t *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // connection, so the client sees a failed response rather than a short one
 // that ends cleanly.
 func abort(req *http.Request, rs *resolver, err error) {
-	p, report := rs.resolve(req, err)
-	rs.observe(req, fmt.Errorf("%w: %w", ErrEncodeAfterCommit, report), p)
+	rs.observe(req, fmt.Errorf("%w: %w", ErrEncodeAfterCommit, err), problem.Problem{})
 	panic(http.ErrAbortHandler)
 }
 

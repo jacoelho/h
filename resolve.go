@@ -22,8 +22,9 @@ type Failure struct {
 	// Err is what went wrong, for logs. It is never sent to the client.
 	Err error
 	// Problem is what the client is sent. It is the zero Problem for an
-	// error found after the response was sent, such as failing to remove
-	// multipart temporary files.
+	// error found after the response started, such as an encoding failure
+	// that aborts the connection or failing to remove multipart temporary
+	// files, since nothing more is sent.
 	Problem problem.Problem
 }
 
@@ -104,31 +105,29 @@ func (rs *resolver) annotated(req *http.Request, report error, p problem.Problem
 		}
 	}()
 	q = rs.annotate(Failure{Request: req, Err: report, Problem: clone(p)})
-	switch {
-	case q.Status != p.Status:
+	if q.Status != p.Status {
 		return p, errors.Join(report, fmt.Errorf("%w: Annotate changed status %d to %d", ErrInvalidProblem, p.Status, q.Status))
-	case q.Validate() != nil && p.Validate() == nil:
-		return p, errors.Join(report, fmt.Errorf("%w: Annotate: %w", ErrInvalidProblem, q.Validate()))
+	}
+	if verr := q.Validate(); verr != nil {
+		return p, errors.Join(report, fmt.Errorf("%w: Annotate: %w", ErrInvalidProblem, verr))
 	}
 	q.Title = q.TitleOrStatus()
 	return q, report
 }
 
-// clone copies p's header and extension maps, so a hook that changes them
-// cannot change another holder's problem.
+// clone copies p's header and extension maps, so a hook that adds or
+// removes entries cannot change another holder's problem. Values inside
+// them, such as the invalid_params list, are shared.
 func clone(p problem.Problem) problem.Problem {
 	p.Header = p.Header.Clone()
 	p.Extra = maps.Clone(p.Extra)
 	return p
 }
 
+// classify chooses the problem for err. Refusals come first, so a carried
+// problem inside one, such as from a custom unmarshaler, is for the
+// RequestErrors mappers to use and cannot leave the 4xx range.
 func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, error) {
-	if p, ok := problem.FromError(err); ok {
-		if verr := p.Validate(); verr != nil {
-			return internalProblem(), errors.Join(err, fmt.Errorf("%w: %w", ErrInvalidProblem, verr))
-		}
-		return p, err
-	}
 	if pe, ok := errors.AsType[*ParamsError](err); ok {
 		return rs.refuse(err, err, pe.problem())
 	}
@@ -137,6 +136,12 @@ func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, err
 			return internalProblem(), errors.Join(err, fmt.Errorf("%w: RequestError status %d", ErrInvalidProblem, re.Status))
 		}
 		return rs.refuse(err, re, problem.Problem{Status: re.Status})
+	}
+	if p, ok := problem.FromError(err); ok {
+		if verr := p.Validate(); verr != nil {
+			return internalProblem(), errors.Join(err, fmt.Errorf("%w: %w", ErrInvalidProblem, verr))
+		}
+		return p, err
 	}
 	if p, ok := cancelled(req, err); ok {
 		return p, err
