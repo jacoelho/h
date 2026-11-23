@@ -91,7 +91,10 @@ func registerEndpoint[In, Out any](r *Router, method, path string, e Endpoint[In
 		if inK == inRaw && len(res.consumes) == 0 {
 			return nil, errors.New("a RawBody route must set Consumes")
 		}
-		return &adapter[In, Out]{endpoint: e, base: r.core.base, res: res, route: route, in: inK, out: outK}, nil
+		return &adapter[In, Out]{
+			endpoint: e, base: r.core.base, res: res, route: route, in: inK, out: outK,
+			duplex: inK == inRaw || codec.IsSequenceTarget(inT),
+		}, nil
 	})
 }
 
@@ -102,6 +105,7 @@ type adapter[In, Out any] struct {
 	route    codec.Route
 	in       inKind
 	out      outKind
+	duplex   bool // the endpoint reads the body while the response is written
 }
 
 // exchange is the state of one request through an endpoint, allocated once
@@ -116,6 +120,18 @@ type exchange struct {
 	status      int
 	contentType string
 	header      []headerField
+	// cleanup removes multipart temporary files. It is set as soon as the
+	// form is parsed, so it runs even when the endpoint panics.
+	cleanup func() error
+}
+
+// runStream runs the stream's write function with a writer that closes
+// when the function returns or panics, so a writer it handed to a goroutine
+// cannot reach a finished response.
+func (x *exchange) runStream(s Stream) error {
+	x.stream = StreamWriter{w: &x.tw, x: x}
+	defer func() { x.stream = StreamWriter{} }()
+	return s.write(&x.stream)
 }
 
 // start sends the status and header fields of a successful response.
@@ -139,84 +155,88 @@ func (a *adapter[In, Out]) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	x := &c.exchange
 	x.tw.ResponseWriter = w
 	x.st = requestState{req: req, base: a.base}
+	x.tw.inherit()
 	x.body.init(&x.tw, req, a.res.maxBody)
 	req.Body = &x.body
-	var cleanup func() error
 	defer func() {
-		if cleanup == nil {
+		if x.cleanup == nil {
 			return
 		}
-		if err := cleanup(); err != nil {
+		if err := x.cleanup(); err != nil {
 			rs.observe(req, fmt.Errorf("h: removing multipart files: %w", err), problem.Problem{})
 		}
 	}()
-	err := contain(func() error {
-		var err error
-		cleanup, err = a.serve(c, req)
-		return err
-	})
-	if err != nil {
+	if err := contain(func() error { return a.serve(c, req) }); err != nil {
 		x.tw.answer(req, rs, err)
 	}
 }
 
 // serve runs the request through the endpoint and writes the response,
 // returning an error for the caller to answer.
-func (a *adapter[In, Out]) serve(c *call[In], req *http.Request) (cleanup func() error, err error) {
+func (a *adapter[In, Out]) serve(c *call[In], req *http.Request) error {
 	x := &c.exchange
 	var enc codec.Encoder
 	var contentType string
 	if a.out == outEncoded {
+		var err error
 		if enc, contentType, err = a.route.Encoder(req.Header.Values("Accept")); err != nil {
-			return nil, &RequestError{Status: http.StatusNotAcceptable, Err: err}
+			return &RequestError{Status: http.StatusNotAcceptable, Err: err}
 		}
 	}
-	if cleanup, err = a.readInput(c, req); err != nil {
-		return cleanup, err
+	if err := a.readInput(c, req); err != nil {
+		return err
 	}
 	resp, err := a.endpoint(req.Context(), Request[In]{st: &x.st, body: c.in})
 	if err != nil {
-		return cleanup, err
+		return err
 	}
 	if err := resp.validate(a.out == outEmpty); err != nil {
-		return cleanup, err
+		return err
 	}
 	x.status, x.header = resp.Status(), resp.header
-	return cleanup, a.write(x, resp, enc, contentType)
+	return a.write(x, resp, enc, contentType)
 }
 
-func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) (func() error, error) {
+func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) error {
 	if a.in == inEmpty {
-		return nil, nil
+		return nil
 	}
 	x := &c.exchange
+	if a.duplex {
+		// An HTTP/1 server closes an unread request body once the response
+		// starts, cutting off a body the endpoint reads while it writes.
+		// HTTP/2 is full duplex already and reports ErrNotSupported, as do
+		// writers that are not connections; both are fine to ignore.
+		_ = http.NewResponseController(&x.tw).EnableFullDuplex()
+	}
 	ct := req.Header.Get("Content-Type")
 	switch a.in {
 	case inForm:
 		if !a.route.Consumes(ct) {
-			return nil, &RequestError{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
+			return &RequestError{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
 		}
 		f, cleanup, err := parseForm(&x.st, &x.body, a.res.maxMemory)
+		x.cleanup = cleanup
 		if err != nil {
-			return cleanup, err
+			return err
 		}
 		c.in = any(f).(In)
-		return cleanup, nil
+		return nil
 	case inRaw:
 		if !a.route.Consumes(ct) {
-			return nil, &RequestError{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
+			return &RequestError{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
 		}
 		c.in = any(RawBody{contentType: ct, r: &x.body}).(In)
-		return nil, nil
+		return nil
 	}
 	dec, err := a.route.Decoder(ct)
 	if err != nil {
-		return nil, &RequestError{Status: http.StatusUnsupportedMediaType, Err: err}
+		return &RequestError{Status: http.StatusUnsupportedMediaType, Err: err}
 	}
 	if err := dec.Decode(&x.body, &c.in); err != nil {
-		return nil, decodeFault(err)
+		return decodeFault(err)
 	}
-	return nil, nil
+	return nil
 }
 
 func (a *adapter[In, Out]) write(x *exchange, resp Response[Out], enc codec.Encoder, contentType string) error {
@@ -234,9 +254,7 @@ func (a *adapter[In, Out]) write(x *exchange, resp Response[Out], enc codec.Enco
 			return fmt.Errorf("%w: zero Stream", ErrInvalidResponse)
 		}
 		x.contentType = s.contentType
-		x.stream = StreamWriter{w: &x.tw, x: x}
-		err := s.write(&x.stream)
-		x.stream = StreamWriter{}
+		err := x.runStream(s)
 		if err != nil {
 			return err
 		}

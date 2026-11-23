@@ -74,13 +74,13 @@ func (p corsPolicy) wrap(next http.Handler, c *core) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		h := w.Header()
+		addVary(h, "Origin")
 		origin := req.Header.Get("Origin")
 		if origin == "" {
 			next.ServeHTTP(w, req)
 			return
 		}
-		h := w.Header()
-		addVary(h, "Origin")
 		trusted := slices.Contains(p.origins, origin)
 		if req.Method == http.MethodOptions && req.Header.Get("Access-Control-Request-Method") != "" {
 			addVary(h, "Access-Control-Request-Method, Access-Control-Request-Headers")

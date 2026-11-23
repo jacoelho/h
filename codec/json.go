@@ -96,8 +96,11 @@ func (c JSON) Decode(r io.Reader, v any) error {
 				if _, err := dec.ReadToken(); err != nil {
 					return false, malformed(err)
 				}
-				if _, err := dec.ReadToken(); !errors.Is(err, io.EOF) {
+				switch _, err := dec.ReadToken(); {
+				case err == nil:
 					return false, &DecodeError{Err: errors.New("trailing data after the JSON array")}
+				case !errors.Is(err, io.EOF):
+					return false, malformed(err)
 				}
 				return false, nil
 			}

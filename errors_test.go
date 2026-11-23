@@ -289,12 +289,9 @@ func TestPanicBecomesProblem(t *testing.T) {
 		t.Fatalf("OnError got %v", log.Last(t).Err)
 	}
 
-	defer func() {
-		if v := recover(); v != http.ErrAbortHandler {
-			t.Fatalf("recovered %v, want http.ErrAbortHandler", v)
-		}
-	}()
-	send(t, r, call{method: "GET", target: "/abort"})
+	if !send(t, r, call{method: "GET", target: "/abort"}).Aborted {
+		t.Fatal("ErrAbortHandler from an endpoint did not abort the response")
+	}
 }
 
 type panickingFormat struct{}

@@ -1,13 +1,18 @@
 package h_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -195,4 +200,129 @@ func TestCORSMaxAgeBelowOneSecondIsRefused(t *testing.T) {
 			t.Errorf("MaxAge %v accepted", d)
 		}
 	}
+}
+
+func TestPanickingFormEndpointLeavesNoTempFiles(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	r := newRouter(t, h.Config{MaxMemory: 1})
+	r.Post("/upload", func(context.Context, h.Request[h.Form]) (h.Response[h.Empty], error) { panic("endpoint broke") })
+
+	var body bytes.Buffer
+	mpw := multipart.NewWriter(&body)
+	fw, err := mpw.CreateFormFile("file", "big.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fw.Write(bytes.Repeat([]byte("x"), 64<<10))
+	_ = mpw.Close()
+	htest.New(t, r).Do("POST", "/upload", body.Bytes(), htest.Header("Content-Type", mpw.FormDataContentType())).Expect(t, http.StatusInternalServerError)
+
+	if left, _ := os.ReadDir(tmp); len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
+	}
+}
+
+func TestProblemKeepsFieldsSetOutsideTheRoute(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Content-Encoding", "identity")
+			w.Header().Set("Cache-Control", "no-store")
+			next.ServeHTTP(w, req)
+		})
+	})
+	r.Get("/x", failing(errors.New("boom")))
+	resp := htest.New(t, r).Do("GET", "/x", nil).Expect(t, http.StatusInternalServerError)
+	if resp.Header().Get("Content-Encoding") != "identity" || resp.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("middleware fields dropped: %v", resp.Header())
+	}
+}
+
+func TestSeqPipelineReadsWholeBodyWhileWriting(t *testing.T) {
+	r := newRouter(t, h.Config{Codecs: ndjsonCodecs(t), SpillAt: 1})
+	r.Post("/double", func(_ context.Context, req h.Request[h.Seq[int]]) (h.Response[h.Seq[int]], error) {
+		return h.OK(h.Items(func(yield func(int, error) bool) {
+			for n, err := range req.Body().All() {
+				if !yield(2*n, err) {
+					return
+				}
+			}
+		})), nil
+	})
+	var in strings.Builder
+	for i := range 2000 {
+		fmt.Fprintf(&in, "%d\n", i)
+	}
+	req, err := http.NewRequest("POST", serve(t, r).URL+"/double", strings.NewReader(in.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	req.Header.Set("Accept", "application/x-ndjson")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("after %d bytes: %v", len(out), err)
+	}
+	if lines := strings.Count(string(out), "\n"); lines != 2000 {
+		t.Fatalf("%d lines, want 2000", lines)
+	}
+}
+
+func TestCORSResponsesVaryOnOriginWithoutOne(t *testing.T) {
+	r := newRouter(t, h.Config{TrustedOrigins: []string{"https://app.example.com"}})
+	r.Get("/x", respond(h.OK(item{"a"})))
+	if v := htest.New(t, r).Do("GET", "/x", nil).Expect(t, http.StatusOK).Header().Values("Vary"); !slices.Contains(strings.Split(strings.Join(v, ","), ","), "Origin") {
+		t.Fatalf("Vary %q, want Origin", v)
+	}
+}
+
+func TestStreamWriterClosesWhenStreamPanics(t *testing.T) {
+	var kept *h.StreamWriter
+	r := newRouter(t, h.Config{})
+	r.Get("/s", func(context.Context, h.Request[h.Empty]) (h.Response[h.Stream], error) {
+		return h.OK(h.NewStream("text/plain", func(w *h.StreamWriter) error {
+			kept = w
+			panic("stream broke")
+		})), nil
+	})
+	htest.New(t, r).Do("GET", "/s", nil).Expect(t, http.StatusInternalServerError)
+	if _, err := kept.Write([]byte("late")); !errors.Is(err, h.ErrStreamClosed) {
+		t.Fatalf("write after the panic: %v", err)
+	}
+}
+
+func TestMalformedQueryKeepsTheValuesItParsed(t *testing.T) {
+	var term string
+	r := newRouter(t, h.Config{})
+	r.Get("/s", func(_ context.Context, req h.Request[h.Empty]) (h.Response[h.Empty], error) {
+		return h.NoContent[h.Empty](), req.Parse(func(p *h.Params) { term = p.Query("q", h.String) })
+	})
+	resp := htest.New(t, r).Do("GET", "/s?q=tea&limit=%zz", nil).Expect(t, http.StatusBadRequest)
+	if term != "tea" || strings.Contains(resp.Body.String(), `"name":"q"`) {
+		t.Fatalf("q = %q; body %s", term, resp.Body)
+	}
+}
+
+func TestStatusZeroIsInvalid(t *testing.T) {
+	var log htest.Errors
+	r := newRouter(t, h.Config{OnError: log.OnError})
+	r.Get("/x", respond(h.Status(0, item{"a"})))
+	htest.New(t, r).Do("GET", "/x", nil).Expect(t, http.StatusInternalServerError)
+	if !errors.Is(log.Last(t).Err, h.ErrInvalidResponse) {
+		t.Fatalf("OnError got %v", log.Last(t).Err)
+	}
+}
+
+func TestNilFunctionsAreSetupErrors(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Get("/f", h.Func[h.Empty, item](nil))
+	r.Get("/b", h.Bind[h.Empty, string, item](nil, func(context.Context, string) (item, error) { return item{}, nil }))
+	wantSetupError(t, r, `GET "/f": nil endpoint`)
+	wantSetupError(t, r, `GET "/b": nil endpoint`)
 }
