@@ -94,14 +94,14 @@ type Router struct {
 }
 
 type core struct {
-	base   string
-	cfg    Config
 	csrf   *http.CrossOriginProtection
+	served *served
 	cors   corsPolicy
+	base   string
 	use    []Middleware
 	routes []pending
 	errs   []error
-	served *served
+	cfg    Config
 }
 
 // served is what Handler built from the registrations. A core is
@@ -117,11 +117,11 @@ type served struct {
 // settings from every level once all middleware and options are known.
 type pending struct {
 	r        *Router
+	build    func(res resolved, pattern string) (http.Handler, error)
 	method   string
 	path     string
 	own      level
 	fallback bool
-	build    func(res resolved, pattern string) (http.Handler, error)
 }
 
 // New returns a Router for cfg, or an error naming a setting that is invalid.
@@ -425,10 +425,10 @@ type resolved struct {
 	codecs    *codec.Set
 	produces  []string
 	consumes  []string
+	use       []Middleware
 	maxBody   int64
 	maxMemory int64
 	spillAt   int
-	use       []Middleware
 	bypass    bool
 }
 
@@ -625,12 +625,12 @@ func (r *Router) Fallback() {
 // write, final status, successful flush and hijack goes through it.
 type trackingWriter struct {
 	http.ResponseWriter
-	wrote bool
 	// writeErr is the first error a write or flush to the client returned,
 	// kept so a failure after the response started is told apart from the
 	// connection's, whatever order the server cancels the request's
 	// context in.
 	writeErr error
+	wrote    bool
 	// inherited marks the representation fields (representationFields)
 	// already set when the route was entered, by middleware outside it: a
 	// problem keeps those, since that middleware also shapes the problem's

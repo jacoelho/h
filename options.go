@@ -19,16 +19,16 @@ type Option struct {
 
 // level holds the settings one router, group or route sets itself.
 type level struct {
+	codecs    *codec.Set
 	mappers   []problem.Mapper
 	refusals  []problem.Mapper
 	formats   []problem.Format
-	codecs    *codec.Set
 	produces  []string
 	consumes  []string
+	use       []Middleware
 	maxBody   int64
 	maxMemory int64
 	spillAt   int
-	use       []Middleware
 	bypass    bool
 }
 

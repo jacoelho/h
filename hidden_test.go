@@ -374,3 +374,35 @@ func TestAFailedFlushOfABufferedResponseEndsIt(t *testing.T) {
 		t.Fatalf("OnError got %v, Hidden() %v; want the failed flush reported as the client leaving", f.Err, f.Hidden())
 	}
 }
+
+func TestAProblemBodyThatFailsToWriteIsReportedAndAborted(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		conn   func(http.ResponseWriter) http.ResponseWriter
+		hidden bool
+	}{
+		{"client left", func(w http.ResponseWriter) http.ResponseWriter { return failingConn{w} }, false},
+		{"server deadline", func(w http.ResponseWriter) http.ResponseWriter {
+			return cutConn{ResponseWriter: w, cancel: func() {}, on: "write", err: os.ErrDeadlineExceeded}
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var log htest.Errors
+			r := newRouter(t, h.Config{OnError: log.OnError})
+			r.Use(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { next.ServeHTTP(tc.conn(w), req) })
+			})
+			r.Get("/x", failing(errEndpoint))
+			if !htest.New(t, r).Do("GET", "/x", nil).Aborted {
+				t.Fatal("response not aborted")
+			}
+			all := log.All()
+			if len(all) != 2 || all[0].Problem.Status != http.StatusInternalServerError {
+				t.Fatalf("OnError got %+v, want the 500 and then the failed write", all)
+			}
+			if f := all[1]; !errors.Is(f.Err, h.ErrEncodeAfterCommit) || f.Hidden() != tc.hidden {
+				t.Fatalf("failed write reported as %v, Hidden() = %v; want ErrEncodeAfterCommit, Hidden() = %v", f.Err, f.Hidden(), tc.hidden)
+			}
+		})
+	}
+}

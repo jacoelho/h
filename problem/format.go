@@ -43,14 +43,14 @@ func (rfc9457) Write(w io.Writer, p Problem) error {
 		return json.MarshalEncode(enc, v)
 	}
 	members := []struct {
-		name string
 		v    any
+		name string
 		omit bool
 	}{
-		{memberType, p.TypeOrBlank(), false},
-		{memberTitle, p.TitleOrStatus(), p.TitleOrStatus() == ""},
-		{memberStatus, p.Status, false},
-		{memberDetail, p.Detail, p.Detail == ""},
+		{name: memberType, v: p.TypeOrBlank()},
+		{name: memberTitle, v: p.TitleOrStatus(), omit: p.TitleOrStatus() == ""},
+		{name: memberStatus, v: p.Status},
+		{name: memberDetail, v: p.Detail, omit: p.Detail == ""},
 	}
 	for _, m := range members {
 		if m.omit {
@@ -84,8 +84,8 @@ func JSON(mediaType string, shape func(Problem) any) Format { //nolint:iface,ire
 }
 
 type jsonShape struct {
-	mediaType string
 	shape     func(Problem) any
+	mediaType string
 }
 
 func (f jsonShape) MediaType() string { return f.mediaType }

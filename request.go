@@ -23,10 +23,10 @@ type Request[In any] struct {
 }
 
 type requestState struct {
-	req      *http.Request
-	base     string
-	query    url.Values // nil until first read; url.ParseQuery never returns nil
 	queryErr error
+	req      *http.Request
+	query    url.Values // nil until first read; url.ParseQuery never returns nil
+	base     string
 }
 
 // NewRequest returns a Request carrying body, for calling an endpoint in a

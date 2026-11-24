@@ -21,9 +21,9 @@ type Seq[T any] struct{ s *seqState[T] }
 // err is the first error the source yielded, kept for the router to answer
 // with when an encoder hides it.
 type seqState[T any] struct {
+	err  error
 	src  iter.Seq2[T, error]
 	used bool
-	err  error
 }
 
 // Items returns a Seq of the elements src yields.
@@ -107,8 +107,8 @@ type seqOutput interface{ sourceErr() error }
 // Content-Type against the route's Consumes and limits its size; errors read
 // from it are answered with 400, 408 or 413 when the endpoint returns them.
 type RawBody struct {
-	contentType string
 	r           io.Reader
+	contentType string
 }
 
 // ContentType returns the request's Content-Type, empty when the client
@@ -130,8 +130,8 @@ func (b RawBody) Reader() io.Reader {
 // problem; after it, the connection is aborted. A zero Stream is an invalid
 // response.
 type Stream struct {
-	contentType string
 	write       func(w *StreamWriter) error
+	contentType string
 }
 
 // NewStream returns a Stream of contentType written by write.
