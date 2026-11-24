@@ -4,6 +4,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,33 +30,31 @@ type call struct {
 	header http.Header
 }
 
-func handlerOf(t testing.TB, target any) http.Handler {
-	t.Helper()
+func handlerOf(tb testing.TB, target any) http.Handler {
+	tb.Helper()
 	switch x := target.(type) {
 	case *h.Router:
 		hd, err := x.Handler()
 		if err != nil {
-			t.Fatalf("Handler: %v", err)
+			tb.Fatalf("Handler: %v", err)
 		}
 		return hd
 	case http.Handler:
 		return x
 	}
-	t.Fatalf("cannot serve %T", target)
+	tb.Fatalf("cannot serve %T", target)
 	return nil
 }
 
-func send(t testing.TB, target any, c call) *htest.Response {
-	t.Helper()
+func send(tb testing.TB, target any, c call) *htest.Response {
+	tb.Helper()
 	var body io.Reader
 	if c.body != "" {
 		body = strings.NewReader(c.body)
 	}
-	req := httptest.NewRequest(c.method, c.target, body)
-	for k, vs := range c.header {
-		req.Header[k] = vs
-	}
-	return htest.ForHandler(t, handlerOf(t, target)).Send(req)
+	req := httptest.NewRequestWithContext(tb.Context(), c.method, c.target, body)
+	maps.Copy(req.Header, c.header)
+	return htest.ForHandler(tb, handlerOf(tb, target)).Send(req)
 }
 
 func jsonHeader() http.Header { return http.Header{"Content-Type": {"application/json"}} }

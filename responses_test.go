@@ -138,13 +138,13 @@ func TestEncoderFailureBeforeCommitIsProblem(t *testing.T) {
 
 func TestEndpointsCallableWithoutRouter(t *testing.T) {
 	ctx := context.Background()
-	req := httptest.NewRequest("POST", "/signup/7?q=x", nil)
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/signup/7?q=x", http.NoBody)
 	req.SetPathValue("id", "7")
 	var got struct {
 		name string
 		id   int64
 	}
-	formEndpoint := func(_ context.Context, r h.Request[h.Form]) (h.Response[h.Empty], error) {
+	var formEndpoint h.Endpoint[h.Form, h.Empty] = func(_ context.Context, r h.Request[h.Form]) (h.Response[h.Empty], error) {
 		return h.Response[h.Empty]{}, r.Body().Parse(func(p *h.FormParams) {
 			got.name = p.Value("name", h.String)
 			got.id = p.Path("id", h.Int64)

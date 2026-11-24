@@ -77,13 +77,22 @@ func TestResponseChecksFail(t *testing.T) {
 	c := htest.New(t, r)
 	text := c.Do("GET", "/text", nil, htest.Header("Accept", "text/plain"))
 
-	if msg := failure(func(tb testing.TB) { text.Expect(tb, http.StatusCreated) }); msg == "" {
+	if msg := failure(func(tb testing.TB) {
+		tb.Helper()
+		text.Expect(tb, http.StatusCreated)
+	}); msg == "" {
 		t.Fatal("Expect passed on a wrong status")
 	}
-	if msg := failure(func(tb testing.TB) { text.Problem(tb) }); msg == "" {
+	if msg := failure(func(tb testing.TB) {
+		tb.Helper()
+		text.Problem(tb)
+	}); msg == "" {
 		t.Fatal("Problem passed on a text body")
 	}
-	if msg := failure(func(tb testing.TB) { text.JSON[note](tb) }); msg == "" {
+	if msg := failure(func(tb testing.TB) {
+		tb.Helper()
+		text.JSON[note](tb)
+	}); msg == "" {
 		t.Fatal("JSON passed on a text body")
 	}
 	if p := c.Do("GET", "/missing", nil).Expect(t, http.StatusNotFound).Problem(t); p.Status != http.StatusNotFound || p.Title != "Not Found" {
@@ -97,7 +106,10 @@ func TestNewFailsOnSetupErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Get("no-slash", func(context.Context, h.Request[h.Empty]) (h.Response[note], error) { return h.Response[note]{}, nil })
-	if msg := failure(func(tb testing.TB) { htest.New(tb, r) }); msg == "" {
+	if msg := failure(func(tb testing.TB) {
+		tb.Helper()
+		htest.New(tb, r)
+	}); msg == "" {
 		t.Fatal("New passed a router with setup errors")
 	}
 }
@@ -115,7 +127,10 @@ func TestErrorsRecordsOnError(t *testing.T) {
 	if all := errs.All(); len(all) != 1 || all[0].Problem.Status != 500 || errs.Last(t).Err.Error() != "boom" {
 		t.Fatalf("recorded %+v", all)
 	}
-	if msg := failure(func(tb testing.TB) { (&htest.Errors{}).Last(tb) }); msg == "" {
+	if msg := failure(func(tb testing.TB) {
+		tb.Helper()
+		(&htest.Errors{}).Last(tb)
+	}); msg == "" {
 		t.Fatal("Last passed with nothing recorded")
 	}
 }

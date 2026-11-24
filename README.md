@@ -35,6 +35,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/jacoelho/h"
 	"github.com/jacoelho/h/problem"
@@ -70,7 +71,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Fatal(http.ListenAndServe("localhost:8080", handler))
+	srv := &http.Server{Addr: "localhost:8080", Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	log.Fatal(srv.ListenAndServe())
 }
 ```
 
@@ -650,13 +652,13 @@ This section is for contributors and coding agents changing the library.
 
 ### Check a change
 
-Run these from the repository root. All three must pass:
+Run the checks CI runs, from the repository root:
 
 ```sh
-go vet ./...
-golangci-lint run ./...
-go test -race ./...
+make check
 ```
+
+It checks formatting and the module's dependencies, runs golangci-lint, runs the tests with and without the race detector, then runs `go vet` and builds every package. The Makefile installs the pinned golangci-lint version into `bin/`.
 
 The linter refuses `encoding/json`. Use `encoding/json/v2` and `encoding/json/jsontext` instead.
 

@@ -18,7 +18,9 @@ func (t Type) String() string { return t.Main + "/" + t.Sub }
 // Parse reads a media type or range, ignoring parameters. ok is false when s
 // is not of the form type/subtype.
 func Parse(s string) (t Type, ok bool) {
-	s, _, _ = strings.Cut(s, ";")
+	if i := strings.IndexByte(s, ';'); i >= 0 {
+		s = s[:i]
+	}
 	main, sub, found := strings.Cut(strings.TrimSpace(s), "/")
 	main, sub = strings.ToLower(strings.TrimSpace(main)), strings.ToLower(strings.TrimSpace(sub))
 	if !found || !token(main) || !token(sub) {
@@ -39,20 +41,20 @@ func Parse(s string) (t Type, ok bool) {
 // Concrete reports whether t names one media type rather than a range.
 func (t Type) Concrete() bool { return t.Main != "*" && !strings.Contains(t.Sub, "*") }
 
-// Matches reports whether the range r includes the concrete type t. Besides
+// Matches reports whether the range t includes the concrete type c. Besides
 // "*/*" and "type/*", a range "type/*+suffix" includes every subtype with
 // that structured syntax suffix (RFC 6839).
-func (r Type) Matches(t Type) bool {
+func (t Type) Matches(c Type) bool {
 	switch {
-	case r.Main == "*":
+	case t.Main == "*":
 		return true
-	case r.Main != t.Main:
+	case t.Main != c.Main:
 		return false
-	case r.Sub == "*" || r.Sub == t.Sub:
+	case t.Sub == "*" || t.Sub == c.Sub:
 		return true
 	}
-	if suffix, ok := strings.CutPrefix(r.Sub, "*+"); ok {
-		return strings.HasSuffix(t.Sub, "+"+suffix)
+	if suffix, ok := strings.CutPrefix(t.Sub, "*+"); ok {
+		return strings.HasSuffix(c.Sub, "+"+suffix)
 	}
 	return false
 }

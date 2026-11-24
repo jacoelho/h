@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -29,22 +30,26 @@ func serve(t *testing.T, r *h.Router) *httptest.Server {
 	return s
 }
 
-func get(t *testing.T, url string, header http.Header) (*http.Response, []byte, error) {
+type reply struct {
+	StatusCode    int
+	Header        http.Header
+	ContentLength int64
+}
+
+func get(t *testing.T, url string, header http.Header) (reply, []byte, error) {
 	t.Helper()
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for k, v := range header {
-		req.Header[k] = v
-	}
+	maps.Copy(req.Header, header)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
-	return resp, body, err
+	return reply{resp.StatusCode, resp.Header, resp.ContentLength}, body, err
 }
 
 func blob(n int) h.Endpoint[h.Empty, string] {
@@ -116,7 +121,7 @@ func TestEncoderFailure(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || resp.StatusCode != 500 || resp.Header.Get("Content-Type") != "application/problem+json" {
+			if err != nil || resp.StatusCode != http.StatusInternalServerError || resp.Header.Get("Content-Type") != "application/problem+json" {
 				t.Fatalf("got %d %q, %v", resp.StatusCode, resp.Header.Get("Content-Type"), err)
 			}
 		})
@@ -140,18 +145,18 @@ func TestStream(t *testing.T) {
 	s := serve(t, r)
 
 	resp, body, err := get(t, s.URL+"/file", nil)
-	if err != nil || resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/pdf" || string(body) != "%PDF" {
+	if err != nil || resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "application/pdf" || string(body) != "%PDF" {
 		t.Fatalf("file: %d %q %q %v", resp.StatusCode, resp.Header.Get("Content-Type"), body, err)
 	}
 	resp, _, _ = get(t, s.URL+"/early", nil)
-	if resp.StatusCode != 500 || resp.Header.Get("Content-Type") != "application/problem+json" {
+	if resp.StatusCode != http.StatusInternalServerError || resp.Header.Get("Content-Type") != "application/problem+json" {
 		t.Fatalf("early error: %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
 	}
 	if _, _, err := get(t, s.URL+"/late", nil); err == nil {
 		t.Fatal("late error: client read a complete response")
 	}
 	resp, _, _ = get(t, s.URL+"/zero", nil)
-	if resp.StatusCode != 500 || !errors.Is(log.Last(t).Err, h.ErrInvalidResponse) {
+	if resp.StatusCode != http.StatusInternalServerError || !errors.Is(log.Last(t).Err, h.ErrInvalidResponse) {
 		t.Fatalf("zero stream: %d, %v", resp.StatusCode, log.Last(t).Err)
 	}
 }
@@ -181,7 +186,10 @@ func TestFlushBeforeSpillAt(t *testing.T) {
 		})), nil
 	})
 	s := serve(t, r)
-	req, _ := http.NewRequest("GET", s.URL+"/feed", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.URL+"/feed", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req.Header.Set("Accept", "application/x-ndjson")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -245,11 +253,15 @@ func failAt(n int, err error) iter.Seq2[item, error] {
 type elemEncoderFails struct{}
 
 func (elemEncoderFails) Encode(w io.Writer, v any) error {
-	for e, err := range v.(codec.Sequence).Elems() {
+	seq, ok := v.(codec.Sequence)
+	if !ok {
+		return fmt.Errorf("encoding %T, want a codec.Sequence", v)
+	}
+	for e, err := range seq.Elems() {
 		if err != nil {
 			return err
 		}
-		if e.(item).Name != "" {
+		if it, ok := e.(item); !ok || it.Name != "" {
 			return errors.New("cannot encode element")
 		}
 	}
@@ -261,11 +273,19 @@ func (elemEncoderFails) CanEncode(reflect.Type) bool { return true }
 type ignoresSourceErrors struct{}
 
 func (ignoresSourceErrors) Encode(w io.Writer, v any) error {
-	for e, err := range v.(codec.Sequence).Elems() {
+	seq, ok := v.(codec.Sequence)
+	if !ok {
+		return fmt.Errorf("encoding %T, want a codec.Sequence", v)
+	}
+	for e, err := range seq.Elems() {
 		if err != nil {
 			return nil
 		}
-		_, _ = io.WriteString(w, e.(item).Name)
+		it, ok := e.(item)
+		if !ok {
+			return fmt.Errorf("element %T, want item", e)
+		}
+		_, _ = io.WriteString(w, it.Name)
 	}
 	return nil
 }
@@ -332,7 +352,11 @@ func TestClientDisconnectStopsSource(t *testing.T) {
 		})), nil
 	})
 	s := serve(t, r)
-	resp, err := http.Get(s.URL + "/endless")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.URL+"/endless", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +472,7 @@ func TestStreamFlushReportsTheConnectionsError(t *testing.T) {
 			return nil
 		})), nil
 	})
-	handlerOf(t, r).ServeHTTP(failingFlusher{httptest.NewRecorder()}, httptest.NewRequest("GET", "/s", nil))
+	handlerOf(t, r).ServeHTTP(failingFlusher{httptest.NewRecorder()}, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/s", http.NoBody))
 	if got == nil || got.Error() != "flush broke" {
 		t.Fatalf("Flush returned %v, want the connection's error", got)
 	}
@@ -515,20 +539,20 @@ func TestARawBodyRouteAnswersWhileTheClientIsStillSending(t *testing.T) {
 	s := serve(t, r)
 
 	body, send := io.Pipe()
-	req, err := http.NewRequest("POST", s.URL+"/echo", body)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.URL+"/echo", body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	t.Cleanup(func() { _ = send.CloseWithError(errors.New("test ended")) })
 	go func() {
 		<-ctx.Done()
 		_ = send.CloseWithError(ctx.Err())
 	}()
 	go func() { _, _ = io.WriteString(send, "first\n") }()
-	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("no response while the body was still open: %v", err)
 	}

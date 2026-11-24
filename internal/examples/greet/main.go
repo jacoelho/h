@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/jacoelho/h"
 	"github.com/jacoelho/h/problem"
@@ -43,7 +44,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Fatal(http.ListenAndServe("localhost:8080", handler))
+	srv := &http.Server{Addr: "localhost:8080", Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+	log.Fatal(srv.ListenAndServe())
 }
 
 // README end

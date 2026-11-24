@@ -44,8 +44,9 @@ func (JSON) represents(t reflect.Type) bool {
 	switch t.Kind() {
 	case reflect.Func, reflect.Chan, reflect.Complex64, reflect.Complex128, reflect.UnsafePointer:
 		return IsSequence(t) || IsSequenceTarget(t)
+	default:
+		return true
 	}
-	return true
 }
 
 // Encode writes v as JSON.

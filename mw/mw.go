@@ -47,7 +47,7 @@ func AccessLog(log *slog.Logger, level slog.Leveler) func(http.Handler) http.Han
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			start := time.Now()
 			rw := &recordingWriter{ResponseWriter: w}
-			defer func() {
+			defer func(ctx context.Context) {
 				attrs := []slog.Attr{
 					slog.String("method", req.Method),
 					slog.String("pattern", req.Pattern),
@@ -56,11 +56,11 @@ func AccessLog(log *slog.Logger, level slog.Leveler) func(http.Handler) http.Han
 					slog.Int64("bytes", rw.bytes),
 					slog.Duration("duration", time.Since(start)),
 				}
-				if id, ok := RequestIDFrom(req.Context()); ok {
+				if id, ok := RequestIDFrom(ctx); ok {
 					attrs = append(attrs, slog.String("request_id", id))
 				}
-				log.LogAttrs(req.Context(), level.Level(), "request", attrs...)
-			}()
+				log.LogAttrs(ctx, level.Level(), "request", attrs...)
+			}(req.Context())
 			next.ServeHTTP(rw, req)
 		})
 	}

@@ -89,5 +89,5 @@ func (st *requestState) queryValues() (url.Values, error) {
 	if st.query == nil {
 		st.query, st.queryErr = url.ParseQuery(st.req.URL.RawQuery)
 	}
-	return st.query, st.queryErr
+	return st.query, st.queryErr //nolint:nilnil // url.ParseQuery keeps the values it parsed before an error, and Params reports both.
 }

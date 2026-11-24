@@ -29,7 +29,7 @@ func TestRequestID(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody)
 			if c.in != "" {
 				req.Header.Set("X-Request-Id", c.in)
 			}
@@ -58,7 +58,7 @@ func TestAccessLog(t *testing.T) {
 		_, req.Pattern = mux.Handler(req)
 		mux.ServeHTTP(w, req)
 	})))
-	req := httptest.NewRequest("GET", "/items/7", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/items/7", http.NoBody)
 	req.Header.Set("X-Request-Id", "r1")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -78,7 +78,7 @@ func TestAccessLogWriterSupportsResponseController(t *testing.T) {
 	handler := mw.AccessLog(slog.New(slog.DiscardHandler), slog.LevelInfo)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		flushErr = http.NewResponseController(w).Flush()
 	}))
-	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody))
 	if flushErr != nil {
 		t.Fatalf("Flush through the access log writer: %v", flushErr)
 	}
@@ -92,7 +92,7 @@ func TestTimeoutSetsDeadline(t *testing.T) {
 			left = time.Until(d)
 		}
 	}))
-	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody))
 	if left <= 50*time.Second || left > time.Minute {
 		t.Fatalf("deadline %v away, want about a minute", left)
 	}
@@ -101,7 +101,7 @@ func TestTimeoutSetsDeadline(t *testing.T) {
 func TestAccessLogWithoutALevelLogsAtInfo(t *testing.T) {
 	var buf bytes.Buffer
 	handler := mw.AccessLog(slog.New(slog.NewTextHandler(&buf, nil)), nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody))
 	if !strings.Contains(buf.String(), "level=INFO") || !strings.Contains(buf.String(), "status=200") {
 		t.Fatalf("log %q, want an info line with status 200", buf.String())
 	}
@@ -125,7 +125,7 @@ func TestAccessLogRecordsTheFirstFinalStatus(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var buf bytes.Buffer
 			handler := mw.AccessLog(slog.New(slog.NewTextHandler(&buf, nil)), nil)(c.handler)
-			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", http.NoBody))
 			if want := fmt.Sprintf("status=%d", c.want); !strings.Contains(buf.String(), want) {
 				t.Fatalf("log %q, want %s, the final status net/http sends", buf.String(), want)
 			}

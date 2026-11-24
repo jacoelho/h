@@ -61,7 +61,7 @@ func TestServerReadTimeoutBoundsBodyPastContextDeadline(t *testing.T) {
 	s.Start()
 	t.Cleanup(s.Close)
 
-	conn, err := net.Dial("tcp", s.Listener.Addr().String())
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", s.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestResponseCannotSetCORSFields(t *testing.T) {
 
 func TestFallbackAllowsEveryRegisteredMethod(t *testing.T) {
 	r := newRouter(t, h.Config{})
-	r.Handle("PROPFIND", "/dav", h.Raw(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(207) }))
+	r.Handle("PROPFIND", "/dav", h.Raw(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusMultiStatus) }))
 	r.Fallback()
 	resp := htest.New(t, r).Do("GET", "/dav", nil).Expect(t, http.StatusMethodNotAllowed)
 	if allow := resp.Header().Get("Allow"); allow != "PROPFIND" {
@@ -258,7 +258,7 @@ func TestSeqPipelineReadsWholeBodyWhileWriting(t *testing.T) {
 	for i := range 2000 {
 		fmt.Fprintf(&in, "%d\n", i)
 	}
-	req, err := http.NewRequest("POST", serve(t, r).URL+"/double", strings.NewReader(in.String()))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, serve(t, r).URL+"/double", strings.NewReader(in.String()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestDefaultCodecsCanRejectUnknownMembers(t *testing.T) {
 	r := newRouter(t, h.Config{Codecs: codec.Default(codec.JSON{RejectUnknownFields: true})})
 	r.Post("/x", h.Func(func(_ context.Context, in item) (item, error) { return in, nil }))
 	c := htest.New(t, r)
-	c.Do("POST", "/x", `{"nmae":"a"}`, htest.Header("Content-Type", "application/json")).Expect(t, http.StatusBadRequest)
+	c.Do("POST", "/x", `{"nmae":"a"}`, htest.Header("Content-Type", "application/json")).Expect(t, http.StatusBadRequest) //nolint:misspell // "nmae" is deliberately not a member of item
 	c.Do("POST", "/x", `{"name":"a"}`, htest.Header("Content-Type", "application/vnd.api+json")).Expect(t, http.StatusOK)
 }
 
@@ -765,7 +765,7 @@ func TestRefusedBodiesWrapTheirCause(t *testing.T) {
 	s.Start()
 	t.Cleanup(s.Close)
 	for _, target := range []string{"/typed", "/raw"} {
-		conn, err := net.Dial("tcp", s.Listener.Addr().String())
+		conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", s.Listener.Addr().String())
 		if err != nil {
 			t.Fatal(err)
 		}

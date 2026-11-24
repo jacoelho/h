@@ -2,9 +2,11 @@ package h
 
 import (
 	"fmt"
-	"github.com/jacoelho/h/internal/serverfield"
 	"net/http"
 	"reflect"
+	"slices"
+
+	"github.com/jacoelho/h/internal/serverfield"
 )
 
 // Response is what an endpoint answers with: a status, header fields and a
@@ -54,7 +56,7 @@ func Status[T any](code int, v T) Response[T] {
 // field replace any that middleware set earlier, except Vary, whose values
 // are merged with the router's own.
 func (r Response[T]) WithHeader(key, value string) Response[T] {
-	r.header = append(r.header[:len(r.header):len(r.header)], headerField{http.CanonicalHeaderKey(key), value})
+	r.header = append(slices.Clip(r.header), headerField{http.CanonicalHeaderKey(key), value})
 	return r
 }
 
