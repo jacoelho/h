@@ -155,8 +155,11 @@ func TestCORSPreflight(t *testing.T) {
 		!strings.Contains(strings.Join(hdr.Values("Vary"), ","), "Origin") {
 		t.Fatalf("preflight header %v", hdr)
 	}
-	if allow := hdr.Get("Access-Control-Allow-Headers"); strings.Contains(allow, "X-Secret") {
-		t.Fatalf("unlisted request header echoed: %q", allow)
+	if allow := hdr.Get("Access-Control-Allow-Headers"); allow != "Content-Type" {
+		t.Fatalf("Access-Control-Allow-Headers %q, want the configured Content-Type only", allow)
+	}
+	if vary := strings.Join(hdr.Values("Vary"), ", "); !strings.Contains(vary, "Access-Control-Request-Method") || !strings.Contains(vary, "Access-Control-Request-Headers") {
+		t.Fatalf("preflight Vary %q", vary)
 	}
 	if called != 0 {
 		t.Fatal("endpoint called by a preflight")
@@ -218,6 +221,27 @@ func TestCORSIsOutsideRootMiddleware(t *testing.T) {
 	}
 }
 
+func TestCORSDefaultsAllowContentTypeAndAuthorizationForFiveMinutes(t *testing.T) {
+	r := newRouter(t, h.Config{TrustedOrigins: []string{"https://app.example"}})
+	r.Put("/items/{id}", respond(h.Response[h.Empty]{}))
+	hdr := send(t, r, preflight("https://app.example", "PUT", "")).Header()
+	if got := hdr.Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization" {
+		t.Errorf("Access-Control-Allow-Headers %q, want the default Content-Type, Authorization", got)
+	}
+	if got := hdr.Get("Access-Control-Max-Age"); got != "300" {
+		t.Errorf("Access-Control-Max-Age %q, want 300, the default 5 minutes", got)
+	}
+}
+
+func TestCORSMaxAgeIsZeroOrAtLeastOneSecond(t *testing.T) {
+	for maxAge, valid := range map[time.Duration]bool{0: true, time.Second: true, 90 * time.Second: true, time.Second - 1: false, time.Nanosecond: false, -time.Second: false} {
+		_, err := h.New(h.Config{TrustedOrigins: []string{"https://app.example"}, CORS: h.CORS{MaxAge: maxAge}})
+		if valid != (err == nil) {
+			t.Errorf("MaxAge %v: New error %v", maxAge, err)
+		}
+	}
+}
+
 func TestCORSWithoutOriginsIsAnError(t *testing.T) {
 	if _, err := h.New(h.Config{CORS: h.CORS{AllowCredentials: true}}); err == nil {
 		t.Fatal("CORS without trusted origins accepted")
@@ -238,5 +262,15 @@ func TestProblemVaryMergesWithCORS(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Vary %q lacks %s", got, want)
 		}
+	}
+}
+
+func TestCORSPreflightIsAnOptionsRequest(t *testing.T) {
+	var called int
+	r := corsRouter(t, &called)
+	hdr := http.Header{"Origin": {"https://app.example"}, "Sec-Fetch-Site": {"cross-site"}, "Access-Control-Request-Method": {"POST"}}
+	send(t, r, call{method: "POST", target: "http://api.example/items", header: hdr}).Expect(t, http.StatusCreated)
+	if called != 1 {
+		t.Fatalf("a POST carrying Access-Control-Request-Method reached the endpoint %d times, want 1", called)
 	}
 }

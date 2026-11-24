@@ -135,6 +135,14 @@ func TestParseRejectsMalformedWildcards(t *testing.T) {
 	}
 }
 
+func TestParseRefusesNonTokens(t *testing.T) {
+	for _, s := range []string{"/json", "application/", "app@lication/json", "application/js on", "application/json/x"} {
+		if _, ok := Parse(s); ok {
+			t.Errorf("Parse(%q) accepted", s)
+		}
+	}
+}
+
 func TestQvalueFollowsRFC9110Grammar(t *testing.T) {
 	valid := map[string]int{"0": 0, "1": 1000, "0.5": 500, "0.123": 123, "1.000": 1000, "1.": 1000, "0.": 0}
 	for v, want := range valid {
@@ -142,7 +150,7 @@ func TestQvalueFollowsRFC9110Grammar(t *testing.T) {
 			t.Errorf("parseQ(%q) = %d, %v; want %d", v, got, ok, want)
 		}
 	}
-	for _, v := range []string{"", "1e-1", "+.5", ".5", "NaN", "0.1234", "1.001", "2", "01", "0.5x"} {
+	for _, v := range []string{"", "1e-1", "+.5", ".5", "NaN", "0.1234", "1.001", "2", "01", "0.5x", "0.0a", "0.:"} {
 		if _, ok := parseQ(v); ok {
 			t.Errorf("parseQ(%q) accepted", v)
 		}
@@ -157,5 +165,17 @@ func BenchmarkNegotiateBrowserAccept(b *testing.B) {
 		if i, ok := Negotiate(accept, offers, false); !ok || i != 0 {
 			b.Fatal(i, ok)
 		}
+	}
+}
+
+func TestNegotiateTakesTheLowestNonZeroQuality(t *testing.T) {
+	if i, ok := Negotiate([]string{"text/plain;q=0.001"}, types("text/plain"), false); !ok || i != 0 {
+		t.Fatalf("Negotiate with q=0.001 = %d, %v; want 0, true", i, ok)
+	}
+}
+
+func TestNegotiateSkipsAMemberWithAMalformedQuality(t *testing.T) {
+	if i, ok := Negotiate([]string{"application/json;q=high, */*"}, types("application/json"), false); !ok || i != 0 {
+		t.Fatalf("Negotiate = %d, %v; want the */* member to accept application/json", i, ok)
 	}
 }

@@ -48,9 +48,11 @@ func Status[T any](code int, v T) Response[T] {
 	return Response[T]{status: code, explicit: true, body: v}
 }
 
-// WithHeader returns a copy of r with a header field added. Content-Type and
-// Content-Length belong to the router and are refused when the response is
-// written. Vary values are merged with the router's own.
+// WithHeader returns a copy of r with a header field added. Content-Type,
+// Content-Length and the Access-Control-* fields belong to the router and
+// are refused when the response is written. The response's values for a
+// field replace any that middleware set earlier, except Vary, whose values
+// are merged with the router's own.
 func (r Response[T]) WithHeader(key, value string) Response[T] {
 	r.header = append(r.header[:len(r.header):len(r.header)], headerField{http.CanonicalHeaderKey(key), value})
 	return r

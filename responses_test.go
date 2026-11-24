@@ -14,6 +14,7 @@ import (
 	"github.com/jacoelho/h"
 	"github.com/jacoelho/h/codec"
 	"github.com/jacoelho/h/htest"
+	"github.com/jacoelho/h/problem"
 )
 
 func respond[T any](resp h.Response[T]) h.Endpoint[h.Empty, T] {
@@ -47,6 +48,12 @@ func TestBodilessResponses(t *testing.T) {
 	if w := send(t, r, call{method: "GET", target: "/same"}); w.Header().Get("ETag") != `"v1"` {
 		t.Fatal("304 lost its ETag")
 	}
+}
+
+func TestStatus599IsAValidResponse(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Get("/x", respond(h.Status(599, item{"a"})))
+	send(t, r, call{method: "GET", target: "/x"}).Expect(t, 599)
 }
 
 func TestInvalidResponses(t *testing.T) {
@@ -165,5 +172,70 @@ func TestEndpointsCallableWithoutRouter(t *testing.T) {
 	}
 	if _, err := (h.Stream{}).WriteTo(&buf); !errors.Is(err, h.ErrInvalidResponse) {
 		t.Fatalf("zero stream: %v", err)
+	}
+}
+
+func TestWithHeaderRepeatedReplacesMiddlewareValuesWithAll(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Use(addHeader("Link", "<m>"))
+	r.Get("/x", respond(h.OK(item{"a"}).WithHeader("Link", "<a>").WithHeader("Link", "<b>")))
+	w := send(t, r, call{method: "GET", target: "/x"})
+	if got := w.Header().Values("Link"); !reflect.DeepEqual(got, []string{"<a>", "<b>"}) {
+		t.Fatalf("Link %q, want <a> and <b>", got)
+	}
+}
+
+func TestVaryNamesEachFieldOnce(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Get("/x", respond(h.OK("a").WithHeader("Vary", "accept, , Authorization, authorization")))
+	w := send(t, r, call{method: "GET", target: "/x"})
+	if got := w.Header().Values("Vary"); !reflect.DeepEqual(got, []string{"Accept", "Authorization"}) {
+		t.Fatalf("Vary %q, want Accept and Authorization once each", got)
+	}
+}
+
+func TestRequestErrorStatusMayBe599(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Get("/x", func(context.Context, h.Request[h.Empty]) (h.Response[item], error) {
+		return h.Response[item]{}, &h.RequestError{Status: 599, Err: errEndpoint}
+	})
+	send(t, r, call{method: "GET", target: "/x"}).Expect(t, 599)
+}
+
+type partialFormat struct{}
+
+func (partialFormat) MediaType() string { return "application/x-partial" }
+
+func (partialFormat) Write(w io.Writer, _ problem.Problem) error {
+	_, _ = io.WriteString(w, "partial")
+	return errors.New("format failed")
+}
+
+func TestAFailedProblemFormatLeavesOnlyTheText(t *testing.T) {
+	r := newRouter(t, h.Config{ProblemFormats: []problem.Format{partialFormat{}, problem.Text}})
+	r.Fallback()
+	w := send(t, r, call{method: "GET", target: "/nope", header: http.Header{"Accept": {"application/x-partial"}}})
+	w.Expect(t, http.StatusNotFound)
+	if w.Body.String() != "Not Found\n" {
+		t.Fatalf("body %q, want only the text problem", w.Body)
+	}
+}
+
+type silent struct{}
+
+func (silent) Encode(io.Writer, any) error { return nil }
+func (silent) CanEncode(reflect.Type) bool { return true }
+
+func TestAnEmptyEncodedBodyHasLengthZero(t *testing.T) {
+	codecs := codec.NewSet()
+	if err := codecs.Encodes(silent{}, "application/x-silent"); err != nil {
+		t.Fatal(err)
+	}
+	r := newRouter(t, h.Config{Codecs: codecs})
+	r.Get("/x", respond(h.OK(item{"a"})))
+	w := send(t, r, call{method: "GET", target: "/x"})
+	w.Expect(t, http.StatusOK)
+	if got := w.Header().Get("Content-Length"); got != "0" {
+		t.Fatalf("Content-Length %q, want 0", got)
 	}
 }

@@ -88,10 +88,10 @@ func TestMultipartForm(t *testing.T) {
 	var got signup
 	r := newRouter(t, h.Config{})
 	r.Post("/signup", signupEndpoint(&got))
-	body, ct := multipartBody(t, map[string]string{"name": "bo", "age": "40"}, map[string]string{"avatar": "PNGDATA"})
+	body, ct := multipartBody(t, map[string]string{"name": "bo", "age": "40", "q": "search"}, map[string]string{"avatar": "PNGDATA"})
 	w := send(t, r, call{method: "POST", target: "/signup", body: body, header: http.Header{"Content-Type": {ct}}})
 	w.Expect(t, http.StatusNoContent)
-	if got.Name != "bo" || got.Age != 40 || got.Avatar != "PNGDATA" {
+	if got.Name != "bo" || got.Age != 40 || got.Avatar != "PNGDATA" || got.Query != "search" {
 		t.Fatalf("got %+v", got)
 	}
 }
@@ -112,9 +112,13 @@ func TestMissingFileIsUsableHeader(t *testing.T) {
 	r := newRouter(t, h.Config{})
 	r.Post("/upload", func(_ context.Context, req h.Request[h.Form]) (h.Response[h.Empty], error) {
 		var name string
-		err := req.Body().Parse(func(p *h.FormParams) { name = p.File("doc").Filename })
-		if name != "" {
-			t.Errorf("missing file named %q", name)
+		var present bool
+		err := req.Body().Parse(func(p *h.FormParams) {
+			_, present = p.FileOpt("doc")
+			name = p.File("doc").Filename
+		})
+		if name != "" || present {
+			t.Errorf("missing file named %q, reported present %v", name, present)
 		}
 		return h.Response[h.Empty]{}, err
 	})
@@ -161,4 +165,67 @@ func TestTooManyMultipartParts(t *testing.T) {
 	req := httptest.NewRequest("POST", "/signup", strings.NewReader(body))
 	req.Header.Set("Content-Type", ct)
 	htest.New(t, r).Send(req).Expect(t, http.StatusRequestEntityTooLarge)
+}
+
+func TestASmallUploadStaysInMemoryByDefault(t *testing.T) {
+	tmp := t.TempDir()
+	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(k, tmp)
+	}
+	r := newRouter(t, h.Config{})
+	var onDisk []os.DirEntry
+	var readErr error
+	r.Post("/upload", func(_ context.Context, req h.Request[h.Form]) (h.Response[h.Empty], error) {
+		err := req.Body().Parse(func(p *h.FormParams) { p.File("doc") })
+		onDisk, readErr = os.ReadDir(tmp)
+		return h.Response[h.Empty]{}, err
+	})
+	body, ct := multipartBody(t, nil, map[string]string{"doc": "small"})
+	send(t, r, call{method: "POST", target: "/upload", body: body, header: http.Header{"Content-Type": {ct}}}).Expect(t, http.StatusNoContent)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(onDisk) != 0 {
+		t.Fatalf("a 5-byte upload under the 1 MiB default MaxMemory went to disk: %v", onDisk)
+	}
+}
+
+func TestAFormContentTypeWithAMalformedParameterIsStillAForm(t *testing.T) {
+	var got signup
+	r := newRouter(t, h.Config{})
+	r.Post("/signup", signupEndpoint(&got))
+	send(t, r, call{method: "POST", target: "/signup", body: "name=ana",
+		header: http.Header{"Content-Type": {"application/x-www-form-urlencoded; charset"}}}).Expect(t, http.StatusNoContent)
+	if got.Name != "ana" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAMultipartContentTypeWithAMalformedParameterIsRefusedAs400(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	var got signup
+	r.Post("/signup", signupEndpoint(&got))
+	body, ct := multipartBody(t, map[string]string{"name": "bo"}, nil)
+	send(t, r, call{method: "POST", target: "/signup", body: body,
+		header: http.Header{"Content-Type": {ct + "; charset"}}}).Expect(t, http.StatusBadRequest)
+}
+
+func TestAFormContentTypeWithADuplicateParameterIsStillAForm(t *testing.T) {
+	var got signup
+	r := newRouter(t, h.Config{})
+	r.Post("/signup", signupEndpoint(&got))
+	send(t, r, call{method: "POST", target: "/signup", body: "name=ana",
+		header: http.Header{"Content-Type": {"application/x-www-form-urlencoded; charset=utf-8; charset=latin1"}}}).Expect(t, http.StatusNoContent)
+	if got.Name != "ana" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAMultipartContentTypeWithADuplicateBoundaryIsRefusedAs400(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	var got signup
+	r.Post("/signup", signupEndpoint(&got))
+	body, ct := multipartBody(t, map[string]string{"name": "bo"}, nil)
+	send(t, r, call{method: "POST", target: "/signup", body: body,
+		header: http.Header{"Content-Type": {ct + "; boundary=other"}}}).Expect(t, http.StatusBadRequest)
 }

@@ -22,6 +22,7 @@ func TestValidate(t *testing.T) {
 		{"about:blank", problem.Problem{Status: 400, Type: "about:blank"}, true},
 		{"extension", problem.Problem{Status: 400, Extra: map[string]any{"balance_2": 30}}, true},
 		{"success status", problem.Problem{Status: 200}, false},
+		{"status 599", problem.Problem{Status: 599}, true},
 		{"status above 599", problem.Problem{Status: 600}, false},
 		{"relative type", problem.Problem{Status: 400, Type: "/probs/x"}, false},
 		{"reserved extension", problem.Problem{Status: 400, Extra: map[string]any{"status": 1}}, false},
@@ -230,5 +231,18 @@ func TestWithLeavesTheOriginalExtraUnchanged(t *testing.T) {
 	}
 	if _, ok := shared.Extra["request_id"]; ok {
 		t.Fatalf("original changed: %+v", shared.Extra)
+	}
+}
+
+func TestErrorDescribesTheProblemItCarries(t *testing.T) {
+	with := problem.Error(problem.Problem{Status: 404, Title: "Order not found", Detail: "no order 7"}).Error()
+	for _, part := range []string{"404", "Order not found", "no order 7"} {
+		if !strings.Contains(with, part) {
+			t.Errorf("Error() = %q, want it to name %q", with, part)
+		}
+	}
+	without := problem.Error(problem.Problem{Status: 503}).Error()
+	if !strings.Contains(without, "503") || !strings.Contains(without, "Service Unavailable") || strings.HasSuffix(strings.TrimSpace(without), ":") {
+		t.Errorf("Error() = %q, want the status and its reason phrase, with no empty detail", without)
 	}
 }

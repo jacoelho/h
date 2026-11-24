@@ -75,6 +75,22 @@ func TestJSONOptionsReplaceReflection(t *testing.T) {
 	}
 }
 
+func TestJSONRejectUnknownFieldsKeepsOptions(t *testing.T) {
+	c := codec.JSON{RejectUnknownFields: true, Options: []json.Options{json.WithUnmarshalers(json.UnmarshalFromFunc(func(d *jsontext.Decoder, o *order) error {
+		_, err := d.ReadValue()
+		o.ID = "custom"
+		return err
+	}))}}
+	var o order
+	if err := c.Decode(strings.NewReader(`{"id":"a"}`), &o); err != nil || o.ID != "custom" {
+		t.Fatalf("Decode = %+v, %v; want the custom unmarshaler's order", o, err)
+	}
+	var m struct{ ID string }
+	if err := c.Decode(strings.NewReader(`{"ID":"a","extra":1}`), &m); err == nil {
+		t.Fatal("unknown member accepted with RejectUnknownFields and Options set")
+	}
+}
+
 type elems []any
 
 func (e elems) Elems() iter.Seq2[any, error] {
@@ -175,6 +191,17 @@ func TestSequencesDecode(t *testing.T) {
 	}
 }
 
+func TestSetForBlamesTheRangesWhenNarrowingRemovesEveryCodec(t *testing.T) {
+	s := codec.Default(codec.JSON{})
+	structT := reflect.TypeFor[order]()
+	if _, err := s.For(structT, nil, []string{"application/xml"}, nil); err == nil || !strings.Contains(err.Error(), "application/xml") {
+		t.Errorf("Consumes(application/xml): %v, want an error naming the range", err)
+	}
+	if _, err := s.For(nil, structT, nil, []string{"application/xml"}); err == nil || !strings.Contains(err.Error(), "application/xml") {
+		t.Errorf("Produces(application/xml): %v, want an error naming the range", err)
+	}
+}
+
 func TestSetForNarrowsByTypeAndRanges(t *testing.T) {
 	s := codec.Default(codec.JSON{})
 	if err := s.Encodes(codec.NDJSON{}, "application/x-ndjson"); err != nil {
@@ -210,6 +237,9 @@ func TestSetForNarrowsByTypeAndRanges(t *testing.T) {
 
 	if _, err := s.For(nil, reflect.TypeFor[func()](), nil, nil); err == nil {
 		t.Fatal("no encoder for a func type, want an error")
+	}
+	if _, err := s.For(structT, nil, []string{"application/xml"}, nil); err == nil {
+		t.Fatal("Consumes(application/xml) for a struct read only as JSON, want an error")
 	}
 }
 
@@ -299,5 +329,92 @@ func TestJSONSequenceKeepsReadErrorAfterClosingBracket(t *testing.T) {
 	}
 	if !errors.Is(err, readErr) {
 		t.Fatalf("err = %v, want the reader's error", err)
+	}
+}
+
+type elemsFunc func() iter.Seq2[any, error]
+
+func (f elemsFunc) Elems() iter.Seq2[any, error] { return f() }
+
+func TestJSONRepresentsSequencesButNotOtherFuncsOrChans(t *testing.T) {
+	c := codec.JSON{}
+	if !c.CanEncode(reflect.TypeFor[elemsFunc]()) {
+		t.Error("CanEncode refuses a func type that is a Sequence")
+	}
+	if c.CanEncode(reflect.TypeFor[func()]()) {
+		t.Error("CanEncode accepts a func type that is not a Sequence")
+	}
+	if c.CanEncode(reflect.TypeFor[chan int]()) {
+		t.Error("CanEncode accepts a channel")
+	}
+	if c.CanDecode(reflect.TypeFor[chan int]()) {
+		t.Error("CanDecode accepts a channel")
+	}
+}
+
+type label string
+
+type blobBytes []byte
+
+func TestTextHandlesNamedStringAndByteTypes(t *testing.T) {
+	c := codec.Text{}
+	for _, typ := range []reflect.Type{reflect.TypeFor[label](), reflect.TypeFor[blobBytes]()} {
+		if !c.CanDecode(typ) || !c.CanEncode(typ) {
+			t.Errorf("Text refuses %v", typ)
+		}
+	}
+	if c.CanDecode(reflect.TypeFor[[]int]()) {
+		t.Error("Text CanDecode accepts []int")
+	}
+	for _, v := range []any{label("hi"), blobBytes("hi")} {
+		var buf bytes.Buffer
+		if err := c.Encode(&buf, v); err != nil || buf.String() != "hi" {
+			t.Errorf("Encode(%T) = %q, %v; want hi", v, buf.String(), err)
+		}
+	}
+	if err := c.Encode(io.Discard, []int{1}); err == nil {
+		t.Error("Encode([]int) succeeded")
+	}
+	var l label
+	var b blobBytes
+	if err := c.Decode(strings.NewReader("hi"), &l); err != nil || l != "hi" {
+		t.Errorf("Decode into *label = %q, %v", l, err)
+	}
+	if err := c.Decode(strings.NewReader("hi"), &b); err != nil || string(b) != "hi" {
+		t.Errorf("Decode into *blobBytes = %q, %v", b, err)
+	}
+	var ints []int
+	if err := c.Decode(strings.NewReader("hi"), &ints); err == nil {
+		t.Error("Decode into *[]int succeeded")
+	}
+}
+
+func TestRouteConsumesOnlyConcreteTypes(t *testing.T) {
+	r, err := codec.Default(codec.JSON{}).For(reflect.TypeFor[order](), nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ct := range []string{"*/*", "application/*"} {
+		if r.Consumes(ct) {
+			t.Errorf("Consumes(%q) = true for a range", ct)
+		}
+	}
+}
+
+func TestNDJSONReportsMalformedInputBetweenValues(t *testing.T) {
+	for _, after := range []string{"]", "x", "}"} {
+		if _, err := readAll(t, codec.NDJSON{}, `{"id":"a"}`+"\n"+after); !errors.As(err, new(*codec.DecodeError)) {
+			t.Errorf("readAll after %q = %v, want a DecodeError", after, err)
+		}
+	}
+}
+
+func TestNDJSONReadsAndWritesOnlySequences(t *testing.T) {
+	c := codec.NDJSON{}
+	if c.CanDecode(reflect.TypeFor[order]()) || c.CanEncode(reflect.TypeFor[order]()) {
+		t.Error("NDJSON accepts a single struct")
+	}
+	if !c.CanDecode(reflect.TypeFor[target]()) || !c.CanEncode(reflect.TypeFor[elems]()) {
+		t.Error("NDJSON refuses a sequence")
 	}
 }

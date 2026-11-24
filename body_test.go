@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -260,5 +261,47 @@ func TestMaxBodyBoundsEmptyInputRoutes(t *testing.T) {
 	send(t, r, call{method: "POST", target: "/raw", body: "far too long"}).Expect(t, http.StatusRequestEntityTooLarge)
 	if _, ok := errors.AsType[*h.RequestError](readErr); !ok {
 		t.Fatalf("read error %v, want *h.RequestError", readErr)
+	}
+}
+
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	set []time.Time
+}
+
+func (d *deadlineRecorder) SetReadDeadline(t time.Time) error {
+	d.set = append(d.set, t)
+	return nil
+}
+
+func TestBodyReadDeadlineFollowsTheContextWhileABodyIsRead(t *testing.T) {
+	ahead := time.Now().Add(time.Minute)
+	for _, c := range []struct {
+		name     string
+		body     string
+		deadline time.Time
+		want     []time.Time
+	}{
+		{"body and a deadline ahead", `{"name":"a"}`, ahead, []time.Time{ahead, {}}},
+		{"no body", "", ahead, nil},
+		{"a deadline already passed", `{"name":"a"}`, time.Now().Add(-time.Minute), nil},
+		{"no deadline", `{"name":"a"}`, time.Time{}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRouter(t, h.Config{})
+			r.Post("/items", echo(nil))
+			req := httptest.NewRequest("POST", "/items", strings.NewReader(c.body))
+			req.Header.Set("Content-Type", "application/json")
+			if !c.deadline.IsZero() {
+				ctx, cancel := context.WithDeadline(req.Context(), c.deadline)
+				defer cancel()
+				req = req.WithContext(ctx)
+			}
+			w := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+			handlerOf(t, r).ServeHTTP(w, req)
+			if !slices.EqualFunc(w.set, c.want, time.Time.Equal) {
+				t.Fatalf("read deadlines set %v, want %v", w.set, c.want)
+			}
+		})
 	}
 }

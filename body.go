@@ -78,6 +78,8 @@ func (b *bodyReader) Read(p []byte) (int, error) {
 	}
 	b.err = err
 	if err == io.EOF && b.deadlineTried {
+		// Clearing fails only where setting failed too, for a writer without
+		// deadline support, or where the connection is gone.
 		_ = http.NewResponseController(b.w).SetReadDeadline(time.Time{})
 	}
 	return n, err

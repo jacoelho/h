@@ -2,13 +2,13 @@ package h_test
 
 import (
 	"context"
-	"github.com/jacoelho/h/htest"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/jacoelho/h"
 	"github.com/jacoelho/h/codec"
+	"github.com/jacoelho/h/htest"
 )
 
 type item struct {

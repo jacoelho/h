@@ -293,7 +293,7 @@ func TestPanicBecomesProblem(t *testing.T) {
 		t.Fatalf("middleware saw %d", status)
 	}
 	perr, ok := errors.AsType[*h.PanicError](log.Last(t).Err)
-	if !ok || !errors.Is(perr, h.ErrPanic) || perr.Value != "boom" || len(perr.Stack) == 0 {
+	if !ok || !errors.Is(perr, h.ErrPanic) || perr.Value != "boom" || len(perr.Stack) == 0 || !strings.Contains(perr.Error(), "boom") {
 		t.Fatalf("OnError got %v", log.Last(t).Err)
 	}
 
@@ -348,3 +348,29 @@ func TestComputedProblemIsCheckedAtRequestTime(t *testing.T) {
 type limitedError struct{}
 
 func (*limitedError) Error() string { return "limited" }
+
+func TestAnUnmappedErrorAfterCancellationIsAnsweredWithABare499(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Get("/wait", func(ctx context.Context, _ h.Request[h.Empty]) (h.Response[item], error) {
+		<-ctx.Done()
+		return h.Response[item]{}, errors.New("driver: bad connection")
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := htest.New(t, r).Send(httptest.NewRequestWithContext(ctx, "GET", "/wait", nil))
+	w.Expect(t, 499)
+	if w.Body.Len() != 0 {
+		t.Fatalf("499 with body %q", w.Body)
+	}
+}
+
+func TestA499AnErrorsMapperChoosesIsWrittenInFull(t *testing.T) {
+	errGone := errors.New("gone")
+	r := newRouter(t, h.Config{Errors: problem.Is(errGone, problem.Problem{Status: 499, Title: "Gone fishing"})})
+	r.Get("/x", failing(errGone))
+	w := send(t, r, call{method: "GET", target: "/x"})
+	w.Expect(t, 499)
+	if !strings.Contains(w.Body.String(), "Gone fishing") {
+		t.Fatalf("body %q", w.Body)
+	}
+}
