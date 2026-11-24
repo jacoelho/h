@@ -8,9 +8,11 @@ h is a Go HTTP router whose handlers are typed functions:
 func(ctx context.Context, req h.Request[In]) (h.Response[Out], error)
 ```
 
-The router reads and decodes the request body, calls your function, and writes the result in the media type the client accepts. When your function returns an error, the router answers with an RFC 9457 problem. You decide which errors become which problems, one mapping per business capability.
+The router decodes the request body and calls your function. It writes the result in the media type the client accepts.
 
-The module requires Go 1.27, because the API uses generic methods. It has no tagged release yet.
+When your function returns an error, the router answers with an RFC 9457 problem. You decide which errors become which problems, with one mapping per business capability.
+
+The module requires Go 1.27, because the API uses generic methods.
 
 ## Install
 
@@ -20,7 +22,7 @@ go get github.com/jacoelho/h
 
 ## Serve your first route
 
-This program answers `GET /greet/{name}` with JSON, and answers an unknown name with a 404 problem:
+This program answers `GET /greet/{name}` with JSON. It answers an unknown name with a 404 problem:
 
 <!-- example: greet -->
 
@@ -72,7 +74,7 @@ func main() {
 }
 ```
 
-`greet` knows nothing about HTTP. `h.Bind` builds its input from the request, and `problem.Is` maps its error to a status:
+`greet` does not depend on HTTP. `h.Bind` builds its input from the request, and `problem.Is` maps its error to a status:
 
 ```console
 $ curl -i localhost:8080/greet/ana
@@ -93,15 +95,19 @@ Content-Length: 59
 
 ## Write endpoints
 
-An endpoint has the type `h.Endpoint[In, Out]`. `In` is the request body and `Out` the response body. Use `h.Empty` for no body.
+An endpoint has the type `h.Endpoint[In, Out]`. `In` is the request body, and `Out` is the response body. Use `h.Empty` for no body.
 
-There are three ways to write one:
+You can write an endpoint in three ways:
 
-- **A plain function.** Write the full signature yourself when you need the request or choose the response, such as `req.Link`, a 201 with `Location`, or a `Content-Disposition` field. `h.Func` and `h.Bind` always answer 200, or 204 for `h.Empty`.
-- **`h.Func(f)`.** Lifts `func(ctx, In) (Out, error)` when the input is the whole body. It answers 200, or 204 when `Out` is `h.Empty`.
-- **`h.Bind(bind, f)`.** Lifts a domain function whose input you build from the body and the path, query and header values.
+- A plain function with the full signature. Use it when you need the request or choose the response, such as `req.Link`, a 201 with `Location`, or a `Content-Disposition` field.
+- `h.Func(f)`, which lifts `func(ctx, In) (Out, error)` when the input is the whole body.
+- `h.Bind(bind, f)`, which lifts a domain function whose input you build from the body and the path, query and header values.
 
-Register endpoints with `Get`, `Delete`, `Post`, `Put` and `Patch`. `Get` and `Delete` take no body, so their `In` is `h.Empty`. Group routes that share a prefix and options:
+`h.Func` and `h.Bind` always answer 200, or 204 when `Out` is `h.Empty`.
+
+Register endpoints with `Get`, `Delete`, `Post`, `Put` and `Patch`. `Get` and `Delete` take no body, so their `In` is `h.Empty`.
+
+Group routes that share a prefix and options:
 
 <!-- example: group -->
 
@@ -119,7 +125,9 @@ orders.Post("/", func(ctx context.Context, req h.Request[NewOrder]) (h.Response[
 
 To share options without a prefix, use an empty one: `r.Group("", h.Errors(OrderErrors))`.
 
-Responses are values: `h.OK`, `h.Created`, `h.Accepted`, `h.NoContent`, `h.NotModified` and `h.Status`. Add header fields with `WithHeader`. The router owns `Content-Type`, `Content-Length` and the CORS fields, so a response that sets them is answered with 500.
+Responses are values: `h.OK`, `h.Created`, `h.Accepted`, `h.NoContent`, `h.NotModified` and `h.Status`. Add header fields with `WithHeader`.
+
+The router owns `Content-Type`, `Content-Length` and the CORS fields. A response that sets one of them is answered with 500.
 
 ## Read path, query and header values
 
@@ -142,11 +150,15 @@ orders.Get("/", func(ctx context.Context, req h.Request[h.Empty]) (h.Response[[]
 })
 ```
 
-The router answers that error with a 400 problem that lists each value under `invalid_params`. A path value that fails is answered with 404 instead, since the path then names no resource.
+The router answers that error with a 400 problem that lists each value under `invalid_params`. A path value that fails is answered with 404 instead, because the path then names no resource.
 
 A parser is any `func(string) (T, error)`. The package provides `h.String`, `h.Int64`, `h.Time(layout)` and `h.OneOf(values...)`.
 
-An empty value, as in `?after=`, is present and passed to the parser, so the parser decides what it means. An HTML form submitted with GET sends its blank fields this way. To read an empty value as absent, wrap the parser:
+### Read an empty value as absent
+
+An empty value, as in `?after=`, is present and is passed to the parser. The parser decides what it means. An HTML form submitted with GET sends its blank fields this way.
+
+To read an empty value as absent, wrap the parser:
 
 <!-- example: optional -->
 
@@ -173,11 +185,13 @@ Use the wrapper with `QueryOr`, `HeaderOr` or `ValueOr` and a nil default:
 after := p.QueryOr("after", nil, optional(h.Time(time.RFC3339))) // nil when absent or empty
 ```
 
-With `Query`, a required value that is empty would pass as nil, and with `QueryOpt`, an empty value would be reported as present.
+The other two methods do not fit. With `Query`, a required value that is empty would pass as nil. With `QueryOpt`, an empty value would be reported as present.
 
 ## Translate errors into problems
 
-Give each business capability one `problem.Mapper` and attach it to that capability's group:
+### Map domain errors
+
+Give each business capability one `problem.Mapper`, and attach it to that capability's group:
 
 <!-- example: order-errors -->
 
@@ -201,26 +215,14 @@ var OrderErrors = problem.Map(
 )
 ```
 
-The mapper constructors are:
+Build mappers with these constructors:
 
-- **`problem.Is(target, p)`.** Matches like `errors.Is`.
-- **`problem.As(f)`.** Matches a typed error and builds the problem from it.
-- **`problem.Func(f)`.** Wraps a hand-written `func(error) (Problem, bool)`.
-- **`problem.Map(...)`.** Tries mappers in order.
+- `problem.Is(target, p)` matches like `errors.Is`.
+- `problem.As(f)` matches a typed error and builds the problem from it.
+- `problem.Func(f)` wraps a hand-written `func(error) (Problem, bool)`.
+- `problem.Map(...)` tries mappers in order.
 
-The route's mappers are tried first, then its groups', then `Config.Errors`.
-
-For a one-off answer that no mapper needs to know, return `problem.Error(p)`. The router sends the problem as it is, after checking it is valid, without consulting mappers, even when the error is wrapped. Wrap only problems your own code made, since a problem built from another service's response is sent verbatim. Inside a refusal, such as from a custom unmarshaler, it is sent when its status is 4xx. Otherwise the router's status stands and `ErrInvalidProblem` is reported. `problem.FromError` gets it back, for tests or middleware:
-
-<!-- example: out-of-stock -->
-
-```go
-if stock == 0 {
-	return h.Response[Order]{}, problem.Error(problem.Problem{Status: http.StatusConflict, Title: "Out of stock"})
-}
-```
-
-An error no mapper knows is answered with 500. Its text goes only to `Config.OnError`, never to the client. A panic in an endpoint is answered with 500 and reported as `h.ErrPanic`. An error that wraps the request's own context error is answered by the router, without mappers: 499 when the client has gone, 503 when the request's deadline passed.
+The router tries the route's mappers first, then its groups' mappers, then `Config.Errors`.
 
 A mapper with a fixed problem is checked when it is built. Assert that in the capability's own tests:
 
@@ -236,6 +238,35 @@ func TestOrderErrorsAreValid(t *testing.T) {
 
 A problem that `problem.As` or `problem.Func` computes is checked only at request time. If it is invalid, the router answers 500 and reports `h.ErrInvalidProblem`.
 
+### Return a one-off problem
+
+For an answer that no mapper needs to know, return `problem.Error(p)`:
+
+<!-- example: out-of-stock -->
+
+```go
+if stock == 0 {
+	return h.Response[Order]{}, problem.Error(problem.Problem{Status: http.StatusConflict, Title: "Out of stock"})
+}
+```
+
+The router checks that the problem is valid, then sends it as it is. It does not consult mappers, even when the error is wrapped.
+
+Wrap only problems your own code made. A problem built from another service's response is sent verbatim.
+
+Inside a refusal, such as an error from a custom unmarshaler, the problem is sent only when its status is 4xx. Otherwise the router's status stands, and `ErrInvalidProblem` is reported.
+
+`problem.FromError` gets the problem back, for tests or middleware.
+
+### Know what no mapper answers
+
+- An error no mapper knows is answered with 500, unless the request's context has ended. Its text goes only to `Config.OnError`, never to the client.
+- A panic in an endpoint is answered with 500 and reported as `h.ErrPanic`.
+- An error that wraps the request's own context error is answered by the router, without mappers. An unmapped error is answered the same way once the context has ended.
+- That answer is 503 when the request's deadline passed. It is 499, with no body, when the context was canceled. That usually means the client went away. Over HTTP/2, the server's `WriteTimeout` also cancels the context, so a 499 can hide a server timeout.
+
+### Describe requests the router refuses
+
 The router refuses some requests itself, with a `*h.RequestError`:
 
 - 400, 408 or 413 for a malformed, slow or oversized body
@@ -244,11 +275,31 @@ The router refuses some requests itself, with a `*h.RequestError`:
 - 403 for a refused cross-origin request (`h.ErrCrossOrigin`)
 - with `Fallback`, 404 (`h.ErrNoRoute`) and 405 (`h.ErrMethodNotAllowed`)
 
-A path, query or header value that fails `Parse` is a `*h.ParamsError`, answered with 400, or 404 for a path value. It wraps each parser's error, so a `RequestErrors` mapper can match one. A parser that returns `problem.Error(p)` answers with `p`, such as a 404 naming the missing resource. When several parameters carry a problem, the first one asked for wins. A carried problem outside 4xx is reported as `h.ErrInvalidProblem`, and the router's answer stands.
+A path, query or header value that fails `Parse` is a `*h.ParamsError`. It is answered with 400, or with 404 for a path value. It wraps each parser's error, so a `RequestErrors` mapper can match one.
 
-These refusals never reach `Errors` mappers, so a catch-all mapper cannot turn a 404 into a 500. Describe them with `Config.RequestErrors` or the `h.RequestErrors` option on a group or route, which work like `Errors`. A `RequestErrors` mapper may answer any 4xx status, for example 422 for a body your clients consider invalid, or 400 for a malformed path value. Any other status is reported as `h.ErrInvalidProblem`, and the router's status stands. A malformed body read by a codec, including a `Seq` element, is a `*h.RequestError` wrapping a `*codec.DecodeError`. For JSON values that error wraps json/v2's `*json.SemanticError`, whose `JSONPointer` names the field, or a `*jsontext.SyntacticError`. A malformed form is a `*h.RequestError` wrapping the `net/url` or `mime/multipart` error. The mapper is offered the refusal and what it wraps, so it can also match an error your own unmarshaler returned. For a body that is too large or too slow, it is offered the `*h.RequestError` and the cause inside it, never the decoder error around it. A body over `MaxBody` is a 413 wrapping `*http.MaxBytesError`. A multipart form too large to parse is a 413 wrapping `multipart.ErrMessageTooLarge`. A body that arrives too slowly is a 408 wrapping `os.ErrDeadlineExceeded`. Match these causes with `problem.As` or `problem.Is`. Any other failure to read the body is a 400 wrapping the server's error, which only `Status` tells apart.
+A parser that returns `problem.Error(p)` answers with `p`, such as a 404 naming the missing resource. When several parameters carry a problem, the first one asked for wins. A carried problem outside 4xx is reported as `h.ErrInvalidProblem`, and the router's answer stands.
 
-List a `*codec.DecodeError` mapper before a `*h.RequestError` mapper, since a malformed body matches both:
+Refusals never reach `Errors` mappers, so a catch-all mapper cannot turn a 404 into a 500. Describe them with `Config.RequestErrors`, or with the `h.RequestErrors` option on a group or route. Both work like `Errors`.
+
+A `RequestErrors` mapper may answer any 4xx status. For example, it may answer 422 for a body your clients consider invalid, or 400 for a malformed path value. Any other status is reported as `h.ErrInvalidProblem`, and the router's status stands.
+
+The mapper is offered the refusal and what it wraps. So it can also match an error your own unmarshaler returned. Match these causes with `problem.As` or `problem.Is`:
+
+| Refused body | Status | Wraps |
+|---|---|---|
+| malformed, read by a codec, including a `Seq` element | 400 | `*codec.DecodeError` |
+| malformed form | 400 | the `net/url` or `mime/multipart` error |
+| multipart `Content-Type` with malformed parameters | 400 | `mime.ErrInvalidMediaParameter` for a dangling parameter; a duplicate parameter or a missing boundary has no exported cause |
+| over `MaxBody` | 413 | `*http.MaxBytesError` |
+| multipart form too large to parse | 413 | `multipart.ErrMessageTooLarge` |
+| arrives too slowly | 408 | `os.ErrDeadlineExceeded` |
+| any other read failure | 400 | the server's error, which only `Status` tells apart |
+
+For JSON values, the `*codec.DecodeError` wraps json/v2's `*json.SemanticError`, whose `JSONPointer` names the field, or a `*jsontext.SyntacticError`.
+
+For a body that is too large or too slow, the mapper is offered the `*h.RequestError` and the cause inside it. It is never offered the decoder error around it.
+
+List a `*codec.DecodeError` mapper before a `*h.RequestError` mapper, because a malformed body matches both:
 
 <!-- example: refusal-problems -->
 
@@ -282,7 +333,17 @@ Pass the mapper as `Config.RequestErrors`:
 r, err := h.New(h.Config{RequestErrors: RefusalProblems})
 ```
 
-Problems are written as `application/problem+json` by default. To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group, with `problem.JSON(mediaType, shape)`. The last format listed answers a client whose `Accept` matches none, as RFC 9110 allows. The default list is `problem.RFC9457` then `problem.Text`. A list you set replaces it, so `[]problem.Format{problem.RFC9457}` answers every client with JSON. `Annotate`, the format and `OnError` receive the status's reason phrase as the title of an `about:blank` problem that has none. `problem.Read` decodes a problem body, for clients and tests.
+### Choose the problem format
+
+Problems are written as `application/problem+json` by default. The default list of formats is `problem.RFC9457`, then `problem.Text`.
+
+To keep an error shape your clients already read, set `Config.ProblemFormats`, or use the `h.ProblemFormats` option on a group. Build the format with `problem.JSON(mediaType, shape)`.
+
+A list you set replaces the default. The last format listed answers a client whose `Accept` matches none, as RFC 9110 allows. So `[]problem.Format{problem.RFC9457}` answers every client with JSON.
+
+An `about:blank` problem without a title gets the status's reason phrase as its title. `Annotate`, the format and `OnError` receive that title.
+
+`problem.Read` decodes a problem body, for clients and tests.
 
 ## Read forms, uploads and sequences
 
@@ -294,6 +355,8 @@ The type of `In` selects how the body is read:
 | `h.Form` | `application/x-www-form-urlencoded` or `multipart/form-data` | read values with `req.Body().Parse`; temporary files are removed after the request |
 | `h.RawBody` | the bytes as sent | the route must set `h.Consumes`; `"*/*"` accepts any valid `Content-Type`, or none |
 | `h.Seq[T]` | a JSON array or NDJSON, read one element at a time | range over `req.Body().All()` |
+
+This route stores an uploaded image of up to 10 MiB:
 
 <!-- example: photos -->
 
@@ -311,7 +374,9 @@ r.Post("/photos", func(ctx context.Context, req h.Request[h.RawBody]) (h.Respons
 }, h.Consumes("image/*"), h.MaxBody(10<<20))
 ```
 
-An endpoint taking `h.RawBody` or `h.Seq[T]` may keep reading the body after its response has started, such as when it streams one output element per input element. Reading the body is bounded by `MaxBody`. A body that is malformed, too large or too slow is answered with 400, 413 or 408. For `h.RawBody` and `h.Seq[T]`, which the endpoint reads itself, that happens when the endpoint returns the read error.
+An endpoint taking `h.RawBody` or `h.Seq[T]` may keep reading the body after its response has started. For example, it may stream one output element per input element.
+
+`MaxBody` bounds reading the body. A body that is malformed, too large or too slow is answered with 400, 413 or 408. The endpoint reads `h.RawBody` and `h.Seq[T]` itself, so for those that answer comes when the endpoint returns the read error.
 
 A body sent without `Content-Type` is matched as `application/octet-stream`, as RFC 9110 allows. `RawBody.ContentType` still returns the empty string, so the endpoint can tell that the client named no type.
 
@@ -327,7 +392,11 @@ orders.Get("/export", func(ctx context.Context, _ h.Request[h.Empty]) (h.Respons
 })
 ```
 
-NDJSON is not in the default codec set. Register it with `codec.Set.Encodes` and `Decodes`. Every route offers the codecs in `Config.Codecs`. Give a media type that only some routes write its own set with `h.Codecs`. This download is JSON-LD with object members in a fixed order, and no other route answers JSON-LD:
+NDJSON is not in the default codec set. Register it with `codec.Set.Encodes` and `Decodes`.
+
+Every route offers the codecs in `Config.Codecs`. To offer a media type on only some routes, give them their own set with `h.Codecs`.
+
+This download is JSON-LD with object members in a fixed order. No other route answers JSON-LD:
 
 <!-- example: jsonld -->
 
@@ -343,7 +412,9 @@ r.Get("/orders.jsonld", func(ctx context.Context, _ h.Request[h.Empty]) (h.Respo
 }, h.Codecs(ld))
 ```
 
-Like any route whose body a codec writes, it answers 406 to an `Accept` its codecs cannot meet, such as `application/json`. The file name here is fixed. For a name that comes from data, build the field with `mime.FormatMediaType("attachment", map[string]string{"filename": name})`, which quotes the name when needed and writes a non-ASCII one percent-encoded as `filename*` only.
+Like any route whose body a codec writes, it answers 406 to an `Accept` its codecs cannot meet, such as `application/json`.
+
+The file name here is fixed. For a name that comes from data, build the field with `mime.FormatMediaType("attachment", map[string]string{"filename": name})`. It quotes the name when needed. It writes a non-ASCII name percent-encoded, as `filename*` only.
 
 Return `h.Stream` to write bytes in a content type of your own:
 
@@ -358,7 +429,11 @@ r.Get("/report.csv", func(ctx context.Context, _ h.Request[h.Empty]) (h.Response
 })
 ```
 
-Responses up to `SpillAt` bytes are buffered and sent with `Content-Length`. While the response is still buffered, an encoding error becomes a problem. Once the response has started, an error aborts the connection, so the client sees a failed response rather than a truncated one that looks complete.
+Responses up to `SpillAt` bytes are buffered and sent with `Content-Length`. While the response is still buffered, an encoding error becomes a problem.
+
+Once the response has started, an error aborts the connection. The client then sees a failed response, rather than a truncated one that looks complete.
+
+## Write the response yourself
 
 For a handler that must write the response itself, such as one serving files, use `Handle`. An error it returns before writing is answered as a problem:
 
@@ -371,7 +446,7 @@ r.Handle("GET", "/static/{file...}", func(w http.ResponseWriter, req *http.Reque
 })
 ```
 
-`h.Raw` adapts a handler that returns no error, either a plain function or an `http.Handler` passed as its method value:
+`h.Raw` adapts a handler that returns no error. Pass it a plain function, or an `http.Handler`'s method value:
 
 <!-- example: raw -->
 
@@ -382,7 +457,7 @@ r.Handle("GET", "/healthz", h.Raw(func(w http.ResponseWriter, _ *http.Request) {
 r.Handle("PROPFIND", "/dav/{path...}", h.Raw(davHandler.ServeHTTP))
 ```
 
-`http.FileServer` looks up the whole request path, base path included, so wrap it in `http.StripPrefix` with the mounted prefix before passing it.
+`http.FileServer` looks up the whole request path, base path included. Wrap it in `http.StripPrefix` with the mounted prefix before passing it.
 
 ## Set limits and media types
 
@@ -401,21 +476,27 @@ Options apply to a group or a single route. The closest setting wins:
 | `h.ProblemFormats(fs...)` | `Config.ProblemFormats` | formats for this scope's problems |
 | `h.Use(mw...)` | none | middleware for this scope |
 
-`Config.Codecs` holds the codecs routes negotiate between unless `h.Codecs` gives a group or route its own, `codec.Default(codec.JSON{})` when nil. `codec.Default` reads `application/json` and every `application/*+json` type, so a JSON route also accepts an `application/ld+json` body. `h.Consumes("application/json")` narrows it. To refuse JSON objects with members no field matches, pass `codec.Default(codec.JSON{RejectUnknownFields: true})`. The same codec writes responses, so its `Options` apply to both directions.
+Routes negotiate between the codecs in `Config.Codecs`, unless `h.Codecs` gives a group or route its own. When `Config.Codecs` is nil, it is `codec.Default(codec.JSON{})`.
+
+`codec.Default` reads `application/json` and every `application/*+json` type. So a JSON route also accepts an `application/ld+json` body. `h.Consumes("application/json")` narrows it.
+
+To refuse JSON objects with members no field matches, pass `codec.Default(codec.JSON{RejectUnknownFields: true})`. The same codec writes responses, so its `Options` apply in both directions.
 
 ## Set time limits
 
-h sets no time limits of its own: your server and middleware decide them.
+h sets no time limits of its own. Your server and middleware decide them:
 
-- **`http.Server.ReadHeaderTimeout`** bounds clients that send headers slowly.
-- **`mw.Timeout(d)`** gives each request a context deadline. The endpoint sees it, and an error caused by it is answered with 503. When the server has no `ReadTimeout`, the deadline also bounds body reads, and a stalled body is answered with 408.
-- **`http.Server.ReadTimeout`** caps reading the whole request. When it is set, it governs body reads instead of the request deadline. The router never lifts it.
+- `http.Server.ReadHeaderTimeout` bounds clients that send headers slowly.
+- `mw.Timeout(d)` gives each request a context deadline. The endpoint sees it, and an error caused by it is answered with 503. When the server has no `ReadTimeout`, the deadline also bounds body reads, and a stalled body is answered with 408.
+- `http.Server.ReadTimeout` caps reading the whole request. When it is set, it governs body reads instead of the request deadline. The router never lifts it.
 
-So with a 30 s `ReadTimeout` and `mw.Timeout(5 * time.Second)`, a stalled upload is cut off at 30 s, while the endpoint's context still ends at 5 s. To bound uploads by the per-request deadline, leave `ReadTimeout` unset and rely on `ReadHeaderTimeout` for slow headers.
+For example, take a 30 s `ReadTimeout` and `mw.Timeout(5 * time.Second)`. A stalled upload is cut off at 30 s, while the endpoint's context still ends at 5 s.
+
+To bound uploads by the per-request deadline, leave `ReadTimeout` unset. Rely on `ReadHeaderTimeout` for slow headers.
 
 ## Accept requests from browsers
 
-Every route is protected against cross-site request forgery by `http.CrossOriginProtection`. Non-browser clients are unaffected. A refused request is answered with a 403 problem through the route's own mappers.
+`http.CrossOriginProtection` protects every route against cross-site request forgery. Non-browser clients are unaffected. A refused request is answered with a 403 problem through the route's own mappers.
 
 To let a frontend on another origin call the API, list its origin. The same list drives CORS:
 
@@ -428,13 +509,15 @@ r, err := h.New(h.Config{
 })
 ```
 
-The router never answers with `Access-Control-Allow-Origin: *` and never names an origin you did not trust.
+The router never answers with `Access-Control-Allow-Origin: *`. It never names an origin you did not trust.
 
-To exempt one route that other sites must reach, such as a single sign-on callback, pass `h.InsecureAllowCrossOrigin()` to that route. Passing it to a group is a setup mistake.
+Some routes must be reachable from other sites, such as a single sign-on callback. Pass `h.InsecureAllowCrossOrigin()` to each such route. Passing it to a group is a setup mistake.
 
-## Add middleware, request data and logging
+## Add middleware
 
-`r.Use` on the root router wraps every request, including unmatched ones. On a group, it wraps that group's routes. Package `mw` provides `RequestID`, `AccessLog` and `Timeout`. `AccessLog` writes one line per request to the logger you pass, at the level you pass:
+`r.Use` on the root router wraps every request, including unmatched ones. On a group, it wraps that group's routes.
+
+Package `mw` provides `RequestID`, `AccessLog` and `Timeout`. `AccessLog` writes one line per request to the logger you pass, at the level you pass:
 
 <!-- example: middleware -->
 
@@ -442,9 +525,13 @@ To exempt one route that other sites must reach, such as a single sign-on callba
 r.Use(mw.RequestID("X-Request-Id"), mw.AccessLog(logger, slog.LevelInfo), mw.Timeout(10*time.Second))
 ```
 
-Every problem the router answers is described by an `h.Failure`: the `Request`, the `Err` that caused it, and the `Problem` the client is sent. Two hooks receive it.
+## Annotate and log failures
 
-`Config.Annotate` adds request data to every problem, including the ones the router raises itself, such as a 404 or a malformed body. It runs after the mappers, so they stay functions of the error alone. It must keep the status. `Problem.With` adds a member without changing a map another problem shares:
+Every problem the router answers is described by an `h.Failure`. It holds the `Request`, the `Err` that caused the problem, and the `Problem` the client is sent. Two hooks receive it: `Config.Annotate` and `Config.OnError`.
+
+`Config.Annotate` adds request data to every problem. That includes the problems the router raises itself, such as a 404 or a malformed body. It runs after the mappers, so the mappers stay functions of the error alone. It must keep the status.
+
+`Problem.With` adds a member without changing a map another problem shares:
 
 <!-- example: annotate -->
 
@@ -457,7 +544,9 @@ Annotate: func(f h.Failure) problem.Problem {
 },
 ```
 
-`Config.OnError` observes every failure and gets its own copy of the problem. An error found after the response was sent, such as failing to remove multipart temporary files, arrives with the zero `Problem`. Most failures are refusals and mapped domain errors that need no log entry. Log the ones answered with a 5xx status. Also log the ones `f.Hidden()` reports, whose status does not show them. A panic and a stream that failed after it started are two:
+`Config.OnError` observes every failure and gets its own copy of the problem. An error found after the response was sent arrives with the zero `Problem`. Failing to remove multipart temporary files is one such error.
+
+Most failures are refusals and mapped domain errors that need no log entry. Log the ones answered with a 5xx status. Also log the ones `f.Hidden()` reports, whose status does not show them, such as a panic or a stream that failed after it started:
 
 <!-- example: onerror -->
 
@@ -483,9 +572,13 @@ mux := http.NewServeMux()
 mux.Handle(r.Mount(), handler) // "/shop/" for BasePath "/shop"
 ```
 
-Call `r.Fallback()` to answer unmatched paths under the router with problems: 405 with `Allow` when the path has routes for other methods, otherwise 404. Without it, those requests get net/http's plain-text answers.
+Call `r.Fallback()` to answer unmatched paths under the router with problems. A path that has routes for other methods gets 405 with `Allow`. Any other path gets 404. Without `Fallback`, those requests get net/http's plain-text answers.
 
-To serve a single-page app under the same base path as the API, register it as a catch-all route. The mux picks the most specific pattern, so API routes still win. The catch-all also answers unknown API paths: a GET gets the app, and other methods get 405. To answer those with 404, serve the app under its own prefix, such as `/app/{path...}`:
+### Serve a single-page app
+
+To serve a single-page app under the same base path as the API, register it as a catch-all route. The mux picks the most specific pattern, so API routes still win.
+
+The catch-all also answers unknown API paths. A GET gets the app, and other methods get 405. To answer those with 404, serve the app under its own prefix, such as `/app/{path...}`:
 
 <!-- example: single-page-app -->
 
@@ -496,9 +589,11 @@ r.Handle("GET", "/{path...}", h.Raw(app.ServeHTTP)) // every other GET, such as 
 
 ## Catch setup mistakes
 
-Registration never panics. Every mistake is collected, and `r.Handler()` returns them all at once, each wrapping `h.ErrSetup`. Examples are a duplicate pattern, a type no codec can read or write, an invalid option, or a change made after `Handler`. `h.New` returns configuration errors directly.
+Registration never panics. The router collects every mistake, and `r.Handler()` returns them all at once, each wrapping `h.ErrSetup`.
 
-Build the handler once at startup and fail fast:
+Mistakes include a duplicate pattern, a type no codec can read or write, an invalid option, and a change made after `Handler`. `h.New` returns configuration errors directly.
+
+Build the handler once at startup, and stop when it returns an error:
 
 <!-- example: handler -->
 
@@ -540,7 +635,12 @@ func TestCreateOrder(t *testing.T) {
 }
 ```
 
-`Do` sends a struct as JSON, and a string, `[]byte` or `io.Reader` as is. `Response.JSON[T]` decodes strictly. `Response.Problem` fails unless the body is an `application/problem+json` problem. For a custom problem format, decode the body with `Response.JSON[T]` and your error type. `htest.Errors` records each `h.Failure` passed to `OnError`. When the router aborts a response that failed after it started, `Response.Aborted` is set. Use `Send` for a request you built yourself, and `httptest.NewServer` when you need a real connection.
+- `Do` sends a struct as JSON, and a string, `[]byte` or `io.Reader` as is.
+- `Response.JSON[T]` decodes strictly.
+- `Response.Problem` fails unless the body is an `application/problem+json` problem. For a custom problem format, decode the body with `Response.JSON[T]` and your error type.
+- `htest.Errors` records each `h.Failure` passed to `OnError`.
+- `Response.Aborted` is set when the router aborts a response that failed after it started.
+- `Send` sends a request you built yourself. Use `httptest.NewServer` when you need a real connection.
 
 To call an endpoint without a router, build its request with `h.NewRequest`, `h.NewFormRequest` or `h.NewRawBody`. Run a `Stream` with `Stream.WriteTo`.
 
@@ -558,9 +658,9 @@ golangci-lint run ./...
 go test -race ./...
 ```
 
-The linter refuses `encoding/json`: use `encoding/json/v2` and `encoding/json/jsontext`.
+The linter refuses `encoding/json`. Use `encoding/json/v2` and `encoding/json/jsontext` instead.
 
-For performance changes, compare at least ten runs with `benchstat`. Measure the old and new code one after the other on the same machine:
+For performance changes, compare at least ten runs with `benchstat`. Measure the old and new code one after the other, on the same machine:
 
 ```sh
 go test -run '^$' -bench . -count=10 . > new.txt
@@ -592,15 +692,21 @@ Within `h`, each file owns one capability:
 - `params.go` and `form.go`: path, query, header and form values
 - `cors.go`: cross-origin resource sharing
 
-Tests sit next to the capability they check. `contracts_test.go` holds regression tests from code review, and `example_orders_test.go` is a complete worked example. `readme_examples_test.go` and `internal/examples/greet` hold the README's code.
+Tests sit next to the capability they check. `contracts_test.go` holds regression tests from code review. `example_orders_test.go` is a complete worked example. `readme_examples_test.go` and `internal/examples/greet` hold the README's code.
 
 ### Keep these rules
 
-- **The library does not panic on a caller mistake.** Registration records a setup error, and request-time mistakes become problems reported to `OnError`. The panics left are `http.ErrAbortHandler`, which is net/http's documented way to abort a started response, and re-panics of it.
-- **Errors keep their context.** Wrap with `%w`, and never swallow an error. A failure that cannot be answered goes to `OnError`.
-- **Every router change goes through `Router.mutable`,** so a change after `Handler` is reported, not lost.
-- **README code lives in Go files.** Each Go block in this README follows an `<!-- example: NAME -->` marker and equals the region between `// README begin NAME` and `// README end` in a `.go` file, mostly `readme_examples_test.go`. `TestREADMEGoBlocksMatchTheirRegions` fails on a difference, a missing region, or an unmarked block. Change the region, then copy it into the README. Mark a block that cannot compile, such as a signature, `<!-- example: none -->`.
-- **Whether a response has started is owned by `trackingWriter`.** Other writers read it, never copy it. `trackingWriter.answer` decides between writing a problem and aborting.
+The library does not panic on a caller mistake. Registration records a setup error, and request-time mistakes become problems reported to `OnError`. The panics left are `http.ErrAbortHandler` and re-panics of it. `http.ErrAbortHandler` is net/http's documented way to abort a started response.
+
+Errors keep their context. Wrap with `%w`, and never swallow an error. A failure that cannot be answered goes to `OnError`.
+
+Every router change goes through `Router.mutable`, so a change after `Handler` is reported, not lost.
+
+`trackingWriter` owns whether a response has started. Other writers read that state and never copy it. `trackingWriter.answer` decides between writing a problem and aborting.
+
+README code lives in Go files. Each Go block in this README follows an `<!-- example: NAME -->` marker. The block equals the region between `// README begin NAME` and `// README end` in a `.go` file, mostly `readme_examples_test.go`.
+
+`TestREADMEGoBlocksMatchTheirRegions` fails on a difference, a missing region, or an unmarked block. To change a block, change the region, then copy it into the README. Mark a block that cannot compile, such as a signature, with `<!-- example: none -->`.
 
 ### Know the lifecycles
 
@@ -611,9 +717,11 @@ Each stateful value has one owner. Update this table when you add a state or a t
 | Router | registering, then built by the first `Handler` call | `core.served`, nil while registering |
 | Group | usable, or broken by a bad prefix or option | `Router.broken` |
 | Response | not started, then started by a final status, a body byte, a successful flush or a hijack; 1xx leaves it not started | `trackingWriter.wrote` |
-| Connection | carrying the response, then failed by the first write or flush error; a failure after the response started is the connection's, and not `Failure.Hidden`, when it is that error and the server did not raise it, or the canceled request context with no write deadline behind it | `trackingWriter.writeErr`, decided by `trackingWriter.connectionLost` |
+| Connection | carrying the response, then failed by the first write or flush error | `trackingWriter.writeErr`, decided by `trackingWriter.connectionLost` |
 | Spill writer | buffering, then streaming past `SpillAt` or on flush | derived from the response's state |
 | Stream writer | open while the stream's function runs, then closed | `StreamWriter.w`, nil when closed |
 | Body reader | no deadline, or pending, armed on first read, cleared at EOF; a read error is kept | `bodyReader` |
 | `Seq` | unconsumed, then consumed; a second range yields `ErrConsumed` | `seqState.used` |
 | Query values | unparsed, then parsed once per request | `requestState.query`, nil until parsed |
+
+A failure after the response started is the connection's, and not `Failure.Hidden`, in two cases. Either it is the failed write or flush error and the server did not raise it, or it is the canceled request context with no write deadline behind it.
