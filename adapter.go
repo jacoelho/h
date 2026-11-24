@@ -200,29 +200,43 @@ func (a *adapter[In, Out]) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 // serve runs the request through the endpoint and writes the response,
-// returning an error for the caller to answer.
+// returning an error for the caller to answer. An encoded response
+// negotiates its encoder before the endpoint runs, so a request it cannot
+// answer is refused without calling it.
 func (a *adapter[In, Out]) serve(c *call[In], req *http.Request) error {
-	x := &c.exchange
-	var enc codec.Encoder
-	var contentType string
-	if a.out == outEncoded {
-		var err error
-		if enc, contentType, err = a.route.Encoder(req.Header.Values("Accept")); err != nil {
-			return &RequestError{Status: http.StatusNotAcceptable, Err: err}
+	if a.out != outEncoded {
+		resp, err := a.respond(c, req)
+		if err != nil {
+			return err
 		}
+		return a.writeUnencoded(&c.exchange, resp)
 	}
-	if err := a.readInput(c, req); err != nil {
-		return err
+	enc, contentType, err := a.route.Encoder(req.Header.Values("Accept"))
+	if err != nil {
+		return &RequestError{Status: http.StatusNotAcceptable, Err: err}
 	}
-	resp, err := a.endpoint(req.Context(), Request[In]{st: &x.st, body: c.in})
+	resp, err := a.respond(c, req)
 	if err != nil {
 		return err
 	}
-	if err := resp.validate(a.out == outEmpty); err != nil {
-		return err
+	return a.writeEncoded(&c.exchange, resp, enc, contentType)
+}
+
+// respond reads the input, calls the endpoint and keeps the status and
+// header fields of a valid response.
+func (a *adapter[In, Out]) respond(c *call[In], req *http.Request) (Response[Out], error) {
+	if err := a.readInput(c, req); err != nil {
+		return Response[Out]{}, err
 	}
-	x.status, x.header = resp.Status(), resp.header
-	return a.write(x, resp, enc, contentType)
+	resp, err := a.endpoint(req.Context(), Request[In]{st: &c.st, body: c.in})
+	if err != nil {
+		return Response[Out]{}, err
+	}
+	if err := resp.validate(a.out == outEmpty); err != nil {
+		return Response[Out]{}, err
+	}
+	c.status, c.header = resp.Status(), resp.header
+	return resp, nil
 }
 
 func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) error {
@@ -273,27 +287,35 @@ func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) error {
 	}
 }
 
-func (a *adapter[In, Out]) write(x *exchange, resp Response[Out], enc codec.Encoder, contentType string) error {
-	if a.route.Choices() > 1 {
-		addVary(x.tw.Header(), "Accept")
-	}
+// writeUnencoded writes a response whose body no codec writes: none, or a
+// Stream.
+func (a *adapter[In, Out]) writeUnencoded(x *exchange, resp Response[Out]) error {
 	if a.out == outEmpty || resp.bodiless {
 		x.start()
 		return nil
 	}
-	if a.out == outStream {
-		s := a.toStream(resp.Body())
-		if s.write == nil {
-			return fmt.Errorf("%w: zero Stream", ErrInvalidResponse)
-		}
-		x.contentType = s.contentType
-		err := x.runStream(s)
-		if err != nil {
-			return err
-		}
-		if !x.tw.wrote {
-			x.start()
-		}
+	s := a.toStream(resp.Body())
+	if s.write == nil {
+		return fmt.Errorf("%w: zero Stream", ErrInvalidResponse)
+	}
+	x.contentType = s.contentType
+	err := x.runStream(s)
+	if err != nil {
+		return err
+	}
+	if !x.tw.wrote {
+		x.start()
+	}
+	return nil
+}
+
+// writeEncoded writes a response whose body enc writes as contentType.
+func (a *adapter[In, Out]) writeEncoded(x *exchange, resp Response[Out], enc codec.Encoder, contentType string) error {
+	if a.route.Choices() > 1 {
+		addVary(x.tw.Header(), "Accept")
+	}
+	if resp.bodiless {
+		x.start()
 		return nil
 	}
 	x.contentType = contentType

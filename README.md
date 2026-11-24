@@ -658,7 +658,7 @@ Run the checks CI runs, from the repository root:
 make check
 ```
 
-It checks formatting and the module's dependencies, runs golangci-lint, runs the tests with and without the race detector, then runs `go vet` and builds every package. The Makefile installs the pinned golangci-lint version into `bin/`.
+It checks formatting and the module's dependencies, runs golangci-lint and nilaway, runs the tests with and without the race detector, then runs `go vet` and builds every package. The Makefile installs pinned versions of golangci-lint and nilaway into `bin/`.
 
 The linter refuses `encoding/json`. Use `encoding/json/v2` and `encoding/json/jsontext` instead.
 
