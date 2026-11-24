@@ -687,6 +687,23 @@ func TestProblemCarriedInsideARefusalIsSentWhen4xx(t *testing.T) {
 	}
 }
 
+func TestARefusalMayBeAnsweredWith499(t *testing.T) {
+	var log htest.Errors
+	r := newRouter(t, h.Config{OnError: log.OnError, RequestErrors: problem.Is(h.ErrNoRoute,
+		problem.Problem{Status: 499, Title: "Gone fishing", Header: http.Header{"Retry-After": {"5"}}})})
+	r.Fallback()
+	w := htest.New(t, r).Do("GET", "/nope", nil).Expect(t, 499)
+	if errors.Is(log.Last(t).Err, h.ErrInvalidProblem) {
+		t.Fatalf("OnError got %v", log.Last(t).Err)
+	}
+	if got := w.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After %q", got)
+	}
+	if !strings.Contains(w.Body.String(), "Gone fishing") {
+		t.Fatalf("body %q", w.Body)
+	}
+}
+
 func TestAllowIsSentOnlyWhileTheStatusIs405(t *testing.T) {
 	r := newRouter(t, h.Config{RequestErrors: problem.Is(h.ErrMethodNotAllowed, problem.Problem{Status: http.StatusNotFound})})
 	r.Get("/x", respond(h.OK(item{"a"})))

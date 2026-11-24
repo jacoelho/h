@@ -603,7 +603,7 @@ func (r *Router) Fallback() {
 		build: func(res resolved, _ string) (http.Handler, error) {
 			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				if methods := c.allowed(req); len(methods) > 0 {
-					p, report := res.resolver.resolve(req, &RequestError{Status: http.StatusMethodNotAllowed, Err: ErrMethodNotAllowed})
+					p, report, canceled := res.resolver.resolve(req, &RequestError{Status: http.StatusMethodNotAllowed, Err: ErrMethodNotAllowed})
 					if p.Status == http.StatusMethodNotAllowed {
 						p.Header = p.Header.Clone()
 						if p.Header == nil {
@@ -612,7 +612,7 @@ func (r *Router) Fallback() {
 						p.Header.Set("Allow", strings.Join(methods, ", "))
 					}
 					res.resolver.observe(req, report, p)
-					res.resolver.write(w, req, p)
+					res.resolver.write(w, req, p, canceled)
 					return
 				}
 				res.resolver.fail(w, req, &RequestError{Status: http.StatusNotFound, Err: ErrNoRoute})

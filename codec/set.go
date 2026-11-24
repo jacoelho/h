@@ -114,44 +114,79 @@ func (s *Set) For(in, out reflect.Type, consumes, produces []string) (Route, err
 	if err != nil {
 		return Route{}, err
 	}
-	r := Route{consumes: cons}
 	prods, err := parseAll(produces)
 	if err != nil {
 		return Route{}, err
 	}
-	if in != nil {
-		for _, d := range s.decoders {
-			if !d.dec.CanDecode(in) {
-				continue
-			}
-			ranges := d.ranges
-			if len(cons) > 0 {
-				ranges = narrow(ranges, cons)
-			}
-			if len(ranges) > 0 {
-				r.decoders = append(r.decoders, decoding{dec: d.dec, ranges: ranges})
-			}
+	decoders, err := s.decodersFor(in, cons)
+	if err != nil {
+		return Route{}, err
+	}
+	encoders, offers, err := s.encodersFor(out, prods)
+	if err != nil {
+		return Route{}, err
+	}
+	return Route{consumes: cons, decoders: decoders, encoders: encoders, offers: offers}, nil
+}
+
+// decodersFor returns the decoders that read in, each narrowed to the
+// ranges consumed when consumed is non-empty. A nil in needs none.
+func (s *Set) decodersFor(in reflect.Type, consumed []media.Type) ([]decoding, error) {
+	if in == nil {
+		return nil, nil
+	}
+	var decoders []decoding
+	readable := false
+	for _, d := range s.decoders {
+		if !d.dec.CanDecode(in) {
+			continue
 		}
-		if len(r.decoders) == 0 {
-			return Route{}, fmt.Errorf("codec: no registered decoder reads %v", in)
+		readable = true
+		ranges := d.ranges
+		if len(consumed) > 0 {
+			ranges = narrow(ranges, consumed)
+		}
+		if len(ranges) > 0 {
+			decoders = append(decoders, decoding{dec: d.dec, ranges: ranges})
 		}
 	}
-	if out != nil {
-		for _, e := range s.encoders {
-			if !e.enc.CanEncode(out) {
-				continue
-			}
-			if len(prods) > 0 && !slices.ContainsFunc(prods, func(p media.Type) bool { return p.Matches(e.typ) }) {
-				continue
-			}
-			r.encoders = append(r.encoders, e)
-			r.offers = append(r.offers, e.typ)
-		}
-		if len(r.encoders) == 0 {
-			return Route{}, fmt.Errorf("codec: no registered encoder writes %v", out)
-		}
+	if len(decoders) == 0 && readable && len(consumed) > 0 {
+		return nil, fmt.Errorf("codec: no registered decoder that reads %v reads a consumed range %v", in, consumed)
 	}
-	return r, nil
+	if len(decoders) == 0 {
+		return nil, fmt.Errorf("codec: no registered decoder reads %v", in)
+	}
+	return decoders, nil
+}
+
+// encodersFor returns the encoders that write out and the media types they
+// offer, keeping only those whose media type a range in produced matches,
+// when produced is non-empty. A nil out needs none.
+func (s *Set) encodersFor(out reflect.Type, produced []media.Type) ([]encodingReg, []media.Type, error) {
+	if out == nil {
+		return nil, nil, nil
+	}
+	var encoders []encodingReg
+	var offers []media.Type
+	writable := false
+	for _, e := range s.encoders {
+		if !e.enc.CanEncode(out) {
+			continue
+		}
+		writable = true
+		if len(produced) > 0 && !slices.ContainsFunc(produced, func(p media.Type) bool { return p.Matches(e.typ) }) {
+			continue
+		}
+		encoders = append(encoders, e)
+		offers = append(offers, e.typ)
+	}
+	if len(encoders) == 0 && writable && len(produced) > 0 {
+		return nil, nil, fmt.Errorf("codec: no registered encoder that writes %v writes a produced range %v", out, produced)
+	}
+	if len(encoders) == 0 {
+		return nil, nil, fmt.Errorf("codec: no registered encoder writes %v", out)
+	}
+	return encoders, offers, nil
 }
 
 // narrow returns, for each pair of a registered range and a consumed range

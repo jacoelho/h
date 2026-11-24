@@ -2,11 +2,14 @@ package h
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
+
+	"github.com/jacoelho/h/internal/media"
 )
 
 // Form is the input of a route that reads an HTML form body:
@@ -98,11 +101,11 @@ func (p *FormParams) Files(name string) []*multipart.FileHeader { return p.form.
 // parseForm reads the form body. cleanup is non-nil when temporary files may
 // exist and must be called when the request ends.
 func parseForm(st *requestState, body io.Reader, maxMemory int64) (f Form, cleanup func() error, err error) {
-	mt, params, err := mime.ParseMediaType(st.req.Header.Get("Content-Type"))
-	if err != nil {
-		return Form{}, nil, &RequestError{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
-	}
-	switch mt {
+	contentType := st.req.Header.Get("Content-Type")
+	// The type is read as the route's Consumes check and the codecs read it,
+	// ignoring parameters; only multipart needs one, its boundary.
+	mt, _ := media.Parse(contentType)
+	switch mt.String() {
 	case "application/x-www-form-urlencoded":
 		b, err := io.ReadAll(body)
 		if err != nil {
@@ -114,6 +117,10 @@ func parseForm(st *requestState, body io.Reader, maxMemory int64) (f Form, clean
 		}
 		return Form{st: st, values: vs}, nil, nil
 	case "multipart/form-data":
+		_, params, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			return Form{}, nil, &RequestError{Status: http.StatusBadRequest, Err: fmt.Errorf("multipart Content-Type: %w", err)}
+		}
 		boundary := params["boundary"]
 		if boundary == "" {
 			return Form{}, nil, &RequestError{Status: http.StatusBadRequest, Err: errors.New("multipart body without a boundary")}

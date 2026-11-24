@@ -280,3 +280,91 @@ func TestZeroFailureIsNotHidden(t *testing.T) {
 		t.Fatal("a Failure with no Request and a failed started response is not hidden")
 	}
 }
+
+type failingWrites struct {
+	http.ResponseWriter
+	n int
+}
+
+func (f *failingWrites) Write([]byte) (int, error) {
+	f.n++
+	return 0, fmt.Errorf("client disconnected, write %d", f.n)
+}
+
+type noFlush struct{ w http.ResponseWriter }
+
+func (n noFlush) Header() http.Header         { return n.w.Header() }
+func (n noFlush) Write(b []byte) (int, error) { return n.w.Write(b) }
+func (n noFlush) WriteHeader(code int)        { n.w.WriteHeader(code) }
+
+func streamFailure(t *testing.T, wrap func(http.ResponseWriter) http.ResponseWriter, write func(*h.StreamWriter) error) h.Failure {
+	t.Helper()
+	var log htest.Errors
+	r := newRouter(t, h.Config{OnError: log.OnError})
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { next.ServeHTTP(wrap(w), req) })
+	})
+	r.Get("/stream", func(context.Context, h.Request[h.Empty]) (h.Response[h.Stream], error) {
+		return h.OK(h.NewStream("text/plain", write)), nil
+	})
+	htest.New(t, r).Do("GET", "/stream", nil)
+	f := log.Last(t)
+	if !errors.Is(f.Err, h.ErrEncodeAfterCommit) {
+		t.Fatalf("OnError got %v, want ErrEncodeAfterCommit", f.Err)
+	}
+	return f
+}
+
+func TestHiddenTellsTheFirstFailedWriteFromLaterOnes(t *testing.T) {
+	f := streamFailure(t, func(w http.ResponseWriter) http.ResponseWriter { return &failingWrites{ResponseWriter: w} }, func(w *h.StreamWriter) error {
+		_, first := w.Write([]byte("a"))
+		_, _ = w.Write([]byte("b"))
+		return first
+	})
+	if f.Hidden() {
+		t.Fatalf("the first failed write to a gone client is hidden: %v", f.Err)
+	}
+}
+
+func TestHiddenReportsAnotherFailureAfterAFailedWrite(t *testing.T) {
+	f := streamFailure(t, func(w http.ResponseWriter) http.ResponseWriter { return &failingWrites{ResponseWriter: w} }, func(w *h.StreamWriter) error {
+		_, _ = w.Write([]byte("a"))
+		return errEndpoint
+	})
+	if !f.Hidden() {
+		t.Fatalf("an endpoint failure after a failed write is not hidden: %v", f.Err)
+	}
+}
+
+func TestHiddenReportsAFlushTheWriterDoesNotSupport(t *testing.T) {
+	f := streamFailure(t, func(w http.ResponseWriter) http.ResponseWriter { return noFlush{w} }, func(w *h.StreamWriter) error {
+		if _, err := w.Write([]byte("a")); err != nil {
+			return err
+		}
+		return w.Flush()
+	})
+	if !f.Hidden() {
+		t.Fatalf("an unsupported flush is reported as the client leaving: %v", f.Err)
+	}
+}
+
+type failingFlush struct{ http.ResponseWriter }
+
+func (failingFlush) FlushError() error { return errors.New("client disconnected") }
+
+func TestAFailedFlushOfABufferedResponseEndsIt(t *testing.T) {
+	var log htest.Errors
+	r := newRouter(t, h.Config{OnError: log.OnError, Codecs: ndjsonCodecs(t)})
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { next.ServeHTTP(failingFlush{w}, req) })
+	})
+	r.Get("/items", func(context.Context, h.Request[h.Empty]) (h.Response[h.Seq[item]], error) {
+		return h.OK(h.Items(func(yield func(item, error) bool) {
+			_ = yield(item{"a"}, nil) && yield(item{"b"}, nil)
+		})), nil
+	})
+	htest.New(t, r).Do("GET", "/items", nil, htest.Header("Accept", "application/x-ndjson"))
+	if f := log.Last(t); !errors.Is(f.Err, h.ErrEncodeAfterCommit) || f.Hidden() {
+		t.Fatalf("OnError got %v, Hidden() %v; want the failed flush reported as the client leaving", f.Err, f.Hidden())
+	}
+}

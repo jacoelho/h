@@ -57,6 +57,7 @@ func TestSpillAt(t *testing.T) {
 	r := newRouter(t, h.Config{SpillAt: 64 << 10})
 	r.Get("/big", blob(4<<20))
 	r.Get("/small", blob(1<<10))
+	r.Get("/limit", blob(64<<10))
 	s := serve(t, r)
 
 	resp, body, err := get(t, s.URL+"/big", http.Header{"Accept": {"text/plain"}})
@@ -69,6 +70,10 @@ func TestSpillAt(t *testing.T) {
 	resp, body, err = get(t, s.URL+"/small", http.Header{"Accept": {"text/plain"}})
 	if err != nil || resp.ContentLength != 1<<10 || len(body) != 1<<10 {
 		t.Fatalf("small response Content-Length %d, body %d, %v", resp.ContentLength, len(body), err)
+	}
+	resp, body, err = get(t, s.URL+"/limit", http.Header{"Accept": {"text/plain"}})
+	if err != nil || resp.ContentLength != 64<<10 || len(body) != 64<<10 {
+		t.Fatalf("response of exactly SpillAt bytes: Content-Length %d, body %d, %v", resp.ContentLength, len(body), err)
 	}
 }
 
@@ -446,5 +451,95 @@ func TestStreamFlushReportsTheConnectionsError(t *testing.T) {
 	handlerOf(t, r).ServeHTTP(failingFlusher{httptest.NewRecorder()}, httptest.NewRequest("GET", "/s", nil))
 	if got == nil || got.Error() != "flush broke" {
 		t.Fatalf("Flush returned %v, want the connection's error", got)
+	}
+}
+
+func TestAStreamKeepsItsStatus(t *testing.T) {
+	for name, write := range map[string]func(*h.StreamWriter) error{
+		"writing nothing": func(*h.StreamWriter) error { return nil },
+		"only flushing":   func(w *h.StreamWriter) error { return w.Flush() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRouter(t, h.Config{})
+			r.Get("/s", func(context.Context, h.Request[h.Empty]) (h.Response[h.Stream], error) {
+				return h.Status(http.StatusAccepted, h.NewStream("text/plain", write)), nil
+			})
+			send(t, r, call{method: "GET", target: "/s"}).Expect(t, http.StatusAccepted)
+		})
+	}
+}
+
+func TestStreamWritesNothingOnFailure(t *testing.T) {
+	if n, err := (h.Stream{}).WriteTo(io.Discard); n != 0 || !errors.Is(err, h.ErrInvalidResponse) {
+		t.Errorf("zero Stream WriteTo = %d, %v; want 0, ErrInvalidResponse", n, err)
+	}
+	s := h.NewStream("text/plain", func(*h.StreamWriter) error { return nil })
+	if n, err := s.WriteTo(nil); n != 0 || !errors.Is(err, h.ErrInvalidResponse) {
+		t.Errorf("WriteTo(nil) = %d, %v; want 0, ErrInvalidResponse", n, err)
+	}
+	var kept *h.StreamWriter
+	_, _ = h.NewStream("text/plain", func(w *h.StreamWriter) error { kept = w; return nil }).WriteTo(io.Discard)
+	if n, err := kept.Write([]byte("late")); n != 0 || !errors.Is(err, h.ErrStreamClosed) {
+		t.Errorf("Write after the stream ended = %d, %v; want 0, ErrStreamClosed", n, err)
+	}
+}
+
+func TestSeqElemsYieldsTheSourceError(t *testing.T) {
+	failed := errors.New("source failed")
+	s := h.Items(func(yield func(item, error) bool) { yield(item{}, failed) })
+	var got error
+	for _, err := range s.Elems() {
+		got = err
+	}
+	if !errors.Is(got, failed) {
+		t.Fatalf("Elems yielded %v, want the source error", got)
+	}
+}
+
+func TestARawBodyRouteAnswersWhileTheClientIsStillSending(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Post("/echo", func(_ context.Context, req h.Request[h.RawBody]) (h.Response[h.Stream], error) {
+		return h.OK(h.NewStream("text/plain", func(w *h.StreamWriter) error {
+			lines := bufio.NewScanner(req.Body().Reader())
+			for lines.Scan() {
+				if _, err := w.Write(append(lines.Bytes(), '\n')); err != nil {
+					return err
+				}
+				if err := w.Flush(); err != nil {
+					return err
+				}
+			}
+			return lines.Err()
+		})), nil
+	}, h.Consumes("text/plain"))
+	s := serve(t, r)
+
+	body, send := io.Pipe()
+	req, err := http.NewRequest("POST", s.URL+"/echo", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	t.Cleanup(func() { _ = send.CloseWithError(errors.New("test ended")) })
+	go func() {
+		<-ctx.Done()
+		_ = send.CloseWithError(ctx.Err())
+	}()
+	go func() { _, _ = io.WriteString(send, "first\n") }()
+	resp, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatalf("no response while the body was still open: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	echoed := bufio.NewReader(resp.Body)
+	if line, err := echoed.ReadString('\n'); line != "first\n" {
+		t.Fatalf("first echo %q, %v", line, err)
+	}
+	_, _ = io.WriteString(send, "second\n")
+	_ = send.Close()
+	if line, err := echoed.ReadString('\n'); line != "second\n" {
+		t.Fatalf("second echo %q, %v", line, err)
 	}
 }

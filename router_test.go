@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +209,9 @@ func TestSetupErrors(t *testing.T) {
 		}, "must set Consumes"},
 		{"route-only option on a group", func(r *h.Router) { r.Group("/g", h.InsecureAllowCrossOrigin()) }, "routes only"},
 		{"bad group prefix", func(r *h.Router) { r.Group("g/").Get("/x", respond(h.OK(item{"a"}))) }, `"g/"`},
+		{"group prefix without a slash", func(r *h.Router) { r.Group("g").Get("/x", respond(h.OK(item{"a"}))) }, `"g"`},
+		{"unclean group prefix", func(r *h.Router) { r.Group("/a/../b").Get("/x", respond(h.OK(item{"a"}))) }, `"/a/../b"`},
+		{"empty method", func(r *h.Router) { r.Handle("", "/x", h.Raw(func(http.ResponseWriter, *http.Request) {})) }, "invalid method"},
 		{"path without slash", func(r *h.Router) { r.Get("x", respond(h.OK(item{"a"}))) }, `"x"`},
 		{"duplicate route", func(r *h.Router) {
 			r.Get("/x", respond(h.OK(item{"a"})))
@@ -454,5 +459,86 @@ func TestHandleErrorAfterEarlyHintsIsAProblem(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError || resp.Header.Get("Content-Type") != "application/problem+json" {
 		t.Fatalf("status %d %q, want a 500 problem", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+}
+
+func TestOneRootMiddlewareSeesThePatternOfRoutesOnly(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	var patterns []string
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			patterns = append(patterns, req.Pattern)
+			next.ServeHTTP(w, req)
+		})
+	})
+	r.Get("/items/{id}", respond(h.OK(item{"a"})))
+	send(t, r, call{method: "GET", target: "/items/1"}).Expect(t, http.StatusOK)
+	send(t, r, call{method: "GET", target: "/items//1"}).Expect(t, http.StatusTemporaryRedirect)
+	if want := []string{"GET /items/{id}", ""}; !reflect.DeepEqual(patterns, want) {
+		t.Fatalf("root middleware saw patterns %q, want %q", patterns, want)
+	}
+}
+
+func TestAllowListsHeadRightAfterGet(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Get("/x", respond(h.OK(item{"a"})))
+	r.Post("/x", respond(h.OK(item{"a"})))
+	r.Fallback()
+	w := send(t, r, call{method: "DELETE", target: "/x"})
+	w.Expect(t, http.StatusMethodNotAllowed)
+	if allow := w.Header().Get("Allow"); allow != "GET, HEAD, POST" {
+		t.Fatalf("Allow %q, want GET, HEAD, POST", allow)
+	}
+}
+
+func TestSizeOptionsAcceptOne(t *testing.T) {
+	r, err := h.New(h.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Get("/x", respond(h.OK(item{"a"})), h.MaxBody(1), h.MaxMemory(1), h.SpillAt(1))
+	if _, err := r.Handler(); err != nil {
+		t.Fatalf("options of 1: %v", err)
+	}
+}
+
+func TestHandleBoundsTheBody(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Handle("POST", "/raw", func(_ http.ResponseWriter, req *http.Request) error {
+		_, err := io.ReadAll(req.Body)
+		return err
+	}, h.MaxBody(4))
+	send(t, r, call{method: "POST", target: "/raw", body: "too long"}).Expect(t, http.StatusRequestEntityTooLarge)
+}
+
+func TestHandleProblemKeepsMiddlewareFieldsAndDropsTheRoutesLength(t *testing.T) {
+	r := newRouter(t, h.Config{})
+	r.Use(addHeader("Cache-Control", "no-store"))
+	r.Handle("GET", "/raw", func(w http.ResponseWriter, _ *http.Request) error {
+		w.Header().Set("Content-Length", "100")
+		return errEndpoint
+	})
+	w := send(t, r, call{method: "GET", target: "/raw"})
+	w.Expect(t, http.StatusInternalServerError)
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control %q, want the root middleware's no-store", got)
+	}
+	if got := w.Header().Get("Content-Length"); got != "" && got != strconv.Itoa(w.Body.Len()) {
+		t.Errorf("Content-Length %q on a problem body of %d bytes", got, w.Body.Len())
+	}
+}
+
+func TestHandleErrorAfterAnOKStatusAborts(t *testing.T) {
+	var log htest.Errors
+	r := newRouter(t, h.Config{OnError: log.OnError})
+	r.Handle("GET", "/raw", func(w http.ResponseWriter, _ *http.Request) error {
+		w.WriteHeader(http.StatusOK)
+		return errEndpoint
+	})
+	if w := send(t, r, call{method: "GET", target: "/raw"}); !w.Aborted {
+		t.Fatalf("an error after WriteHeader(200) was answered with %d, want the connection aborted", w.Code)
+	}
+	if !errors.Is(log.Last(t).Err, h.ErrEncodeAfterCommit) {
+		t.Fatalf("OnError got %v", log.Last(t).Err)
 	}
 }

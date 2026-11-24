@@ -38,6 +38,8 @@ func TestQueryValues(t *testing.T) {
 		First   string
 		All     []string
 		Opt     bool
+		Present string
+		Found   bool
 		Default int64
 		Header  int64
 	}
@@ -50,13 +52,14 @@ func TestQueryValues(t *testing.T) {
 		g.First = p.Query("tag", h.String)
 		g.All = p.QueryAll("tag", h.String)
 		_, g.Opt = p.QueryOpt("missing", h.String)
+		g.Present, g.Found = p.QueryOpt("tag", h.String)
 		g.Default = p.QueryOr("page", 3, h.Int64)
 		g.Header = p.Header("X-N", h.Int64)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := got{Limit: "", First: "a", All: []string{"a", "b"}, Opt: false, Default: 3, Header: 7}
+	want := got{Limit: "", First: "a", All: []string{"a", "b"}, Opt: false, Present: "a", Found: true, Default: 3, Header: 7}
 	if !reflect.DeepEqual(g, want) {
 		t.Fatalf("got %+v, want %+v", g, want)
 	}
@@ -127,5 +130,11 @@ func TestZeroValuesAreUsable(t *testing.T) {
 	err = form.Parse(func(p *h.FormParams) { p.Value("name", h.String) })
 	if _, ok := errors.AsType[*h.ParamsError](err); !ok {
 		t.Fatalf("zero Form Parse: %v", err)
+	}
+}
+
+func TestLinkWithoutBaseOrSegmentsIsTheRoot(t *testing.T) {
+	if got := h.NewRequest(nil, h.Empty{}).Link(); got != "/" {
+		t.Fatalf("Link() = %q, want /", got)
 	}
 }
