@@ -44,7 +44,18 @@ var ErrInvalid = errors.New("problem: invalid problem")
 
 var extensionName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
-var reserved = map[string]bool{"type": true, "title": true, "status": true, "detail": true, "instance": true}
+// The members RFC 9457, section 3.1 defines, and the type of a problem
+// that names no kind beyond its status.
+const (
+	memberType     = "type"
+	memberTitle    = "title"
+	memberStatus   = "status"
+	memberDetail   = "detail"
+	memberInstance = "instance"
+	blankType      = "about:blank"
+)
+
+var reserved = map[string]bool{memberType: true, memberTitle: true, memberStatus: true, memberDetail: true, memberInstance: true}
 
 // Validate reports whether p can be written: Status in 400 to 599, Type empty,
 // "about:blank" or an absolute URI, no Header field the server owns
@@ -54,7 +65,7 @@ func (p Problem) Validate() error {
 	if p.Status < 400 || p.Status > 599 {
 		return fmt.Errorf("%w: status %d is not 400 to 599", ErrInvalid, p.Status)
 	}
-	if p.Type != "" && p.Type != "about:blank" {
+	if p.Type != "" && p.Type != blankType {
 		u, err := url.Parse(p.Type)
 		if err != nil || !u.IsAbs() {
 			return fmt.Errorf("%w: type %q is not an absolute URI", ErrInvalid, p.Type)
@@ -112,7 +123,7 @@ func (p Problem) With(name string, v any) Problem {
 // TypeOrBlank returns p.Type, or "about:blank" when it is empty.
 func (p Problem) TypeOrBlank() string {
 	if p.Type == "" {
-		return "about:blank"
+		return blankType
 	}
 	return p.Type
 }
@@ -120,7 +131,7 @@ func (p Problem) TypeOrBlank() string {
 // TitleOrStatus returns p.Title, or the status's reason phrase when the title
 // is empty and the type is "about:blank".
 func (p Problem) TitleOrStatus() string {
-	if p.Title == "" && p.TypeOrBlank() == "about:blank" {
+	if p.Title == "" && p.TypeOrBlank() == blankType {
 		return http.StatusText(p.Status)
 	}
 	return p.Title

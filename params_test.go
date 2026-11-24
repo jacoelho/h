@@ -44,7 +44,7 @@ func TestQueryValues(t *testing.T) {
 		Header  int64
 	}
 	var g got
-	req := httptest.NewRequest("GET", "/x?limit=&tag=a&tag=b", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x?limit=&tag=a&tag=b", http.NoBody)
 	req.Header.Add("X-N", "7")
 	req.Header.Add("X-N", "8")
 	err := h.NewRequest(req, h.Empty{}).Parse(func(p *h.Params) {
@@ -66,7 +66,7 @@ func TestQueryValues(t *testing.T) {
 }
 
 func TestEmptyValueReachesParser(t *testing.T) {
-	req := httptest.NewRequest("GET", "/x?limit=", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/x?limit=", http.NoBody)
 	err := h.NewRequest(req, h.Empty{}).Parse(func(p *h.Params) { p.Query("limit", h.Int64) })
 	pe, ok := errors.AsType[*h.ParamsError](err)
 	if !ok || len(pe.Params) != 1 || errors.Is(pe.Params[0].Err, h.ErrMissing) {

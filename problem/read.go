@@ -26,7 +26,7 @@ func Read(r io.Reader) (Problem, error) {
 		return Problem{}, fmt.Errorf("%w: not a JSON object", ErrInvalid)
 	}
 	var p Problem
-	if statusRaw, ok := members["status"]; ok {
+	if statusRaw, ok := members[memberStatus]; ok {
 		if statusRaw.Kind() != '0' {
 			return Problem{}, fmt.Errorf("%w: status is not a number", ErrInvalid)
 		}
@@ -34,7 +34,7 @@ func Read(r io.Reader) (Problem, error) {
 			return Problem{}, fmt.Errorf("%w: status: %w", ErrInvalid, err)
 		}
 	}
-	for name, dst := range map[string]*string{"type": &p.Type, "title": &p.Title, "detail": &p.Detail} {
+	for name, dst := range map[string]*string{memberType: &p.Type, memberTitle: &p.Title, memberDetail: &p.Detail} {
 		if raw, ok := members[name]; ok {
 			if err := json.Unmarshal(raw, dst); err != nil {
 				return Problem{}, fmt.Errorf("%w: %s: %w", ErrInvalid, name, err)
@@ -43,7 +43,7 @@ func Read(r io.Reader) (Problem, error) {
 	}
 	for name, raw := range members {
 		switch name {
-		case "type", "title", "status", "detail":
+		case memberType, memberTitle, memberStatus, memberDetail:
 			continue
 		}
 		var v any

@@ -67,16 +67,16 @@ func registerEndpoint[In, Out any](r *Router, method, path string, e Endpoint[In
 		return
 	}
 	if e == nil {
-		r.core.fail("%s %q: nil endpoint", method, path)
+		r.core.failf("%s %q: nil endpoint", method, path)
 		return
 	}
 	inT, outT := reflect.TypeFor[In](), reflect.TypeFor[Out]()
 	if err := errors.Join(checkNotNamedEmpty(inT, "input"), checkNotNamedEmpty(outT, "output")); err != nil {
-		r.core.fail("%s %q: %v", method, path, err)
+		r.core.failf("%s %q: %v", method, path, err)
 		return
 	}
 	inK, outK := inKindOf(inT), outKindOf(outT)
-	r.register(method, path, opts, func(res resolved, pattern string) (http.Handler, error) {
+	r.register(method, path, opts, func(res resolved, _ string) (http.Handler, error) {
 		var decodeT, encodeT reflect.Type
 		if inK == inDecoded {
 			decodeT = inT
@@ -208,7 +208,7 @@ func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) error {
 		// ResponseController.EnableFullDuplex). Writers that cannot enable
 		// it report ErrNotSupported, which needs no handling: HTTP/2 is
 		// full duplex already.
-		_ = http.NewResponseController(&x.tw).EnableFullDuplex()
+		_ = http.NewResponseController(&x.tw).EnableFullDuplex() //nolint:errcheck // ErrNotSupported is the only failure; see above.
 	}
 	ct := req.Header.Get("Content-Type")
 	match := ct
@@ -225,23 +225,24 @@ func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) error {
 		if err != nil {
 			return err
 		}
-		c.in = any(f).(In)
+		c.in = any(f).(In) //nolint:errcheck,forcetypeassert,revive // inKindOf returns inForm only when In is Form.
 		return nil
 	case inRaw:
 		if !a.route.Consumes(match) {
 			return &RequestError{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
 		}
-		c.in = any(RawBody{contentType: ct, r: &x.body}).(In)
+		c.in = any(RawBody{contentType: ct, r: &x.body}).(In) //nolint:errcheck,forcetypeassert,revive // inKindOf returns inRaw only when In is RawBody.
+		return nil
+	default:
+		dec, err := a.route.Decoder(match)
+		if err != nil {
+			return &RequestError{Status: http.StatusUnsupportedMediaType, Err: err}
+		}
+		if err := dec.Decode(&x.body, &c.in); err != nil {
+			return decodeFault(err)
+		}
 		return nil
 	}
-	dec, err := a.route.Decoder(match)
-	if err != nil {
-		return &RequestError{Status: http.StatusUnsupportedMediaType, Err: err}
-	}
-	if err := dec.Decode(&x.body, &c.in); err != nil {
-		return decodeFault(err)
-	}
-	return nil
 }
 
 func (a *adapter[In, Out]) write(x *exchange, resp Response[Out], enc codec.Encoder, contentType string) error {
@@ -254,7 +255,7 @@ func (a *adapter[In, Out]) write(x *exchange, resp Response[Out], enc codec.Enco
 	}
 	body := any(resp.Body())
 	if a.out == outStream {
-		s := body.(Stream)
+		s := body.(Stream) //nolint:errcheck,forcetypeassert,revive // a.out is outStream only when Out is Stream.
 		if s.write == nil {
 			return fmt.Errorf("%w: zero Stream", ErrInvalidResponse)
 		}

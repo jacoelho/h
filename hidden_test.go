@@ -22,7 +22,13 @@ var errEndpoint = errors.New("endpoint failed")
 
 type cancelKey struct{}
 
-func cancelRequest(ctx context.Context) { ctx.Value(cancelKey{}).(context.CancelFunc)() }
+func cancelRequest(ctx context.Context) {
+	cancel, ok := ctx.Value(cancelKey{}).(context.CancelFunc)
+	if !ok {
+		panic("request context carries no cancel function")
+	}
+	cancel()
+}
 
 func bigItems(after func(ctx context.Context) error) h.Endpoint[h.Empty, h.Seq[item]] {
 	return func(ctx context.Context, _ h.Request[h.Empty]) (h.Response[h.Seq[item]], error) {

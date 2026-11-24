@@ -30,9 +30,10 @@ func passThrough(next http.Handler) http.Handler {
 }
 
 func benchServe(b *testing.B, handler http.Handler, body []byte, accept string) {
+	b.Helper()
 	b.ReportAllocs()
 	for b.Loop() {
-		req := httptest.NewRequest("POST", "/p", bytes.NewReader(body))
+		req := httptest.NewRequestWithContext(b.Context(), http.MethodPost, "/p", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		if accept != "" {
 			req.Header.Set("Accept", accept)
@@ -90,7 +91,7 @@ func BenchmarkB2LargeResponse(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		w := discardWriter{header: http.Header{}}
-		handler.ServeHTTP(&w, httptest.NewRequest("GET", "/big", nil))
+		handler.ServeHTTP(&w, httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/big", http.NoBody))
 		if w.status != 200 {
 			b.Fatalf("status %d", w.status)
 		}
@@ -113,7 +114,7 @@ func BenchmarkB3PatternLookup(b *testing.B) {
 	for i := range 50 {
 		mux.HandleFunc(fmt.Sprintf("GET /r%d/{id}", i), func(http.ResponseWriter, *http.Request) {})
 	}
-	req := httptest.NewRequest("GET", "/r42/7", nil)
+	req := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "/r42/7", http.NoBody)
 	b.ReportAllocs()
 	for b.Loop() {
 		_, _ = mux.Handler(req)

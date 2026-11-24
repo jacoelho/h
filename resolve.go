@@ -116,16 +116,16 @@ func mapped(mappers []problem.Mapper, err error) (p problem.Problem, ok bool, pe
 	return problem.Problem{}, false, nil
 }
 
-// resolve returns the problem for err, the error to report, which adds
-// ErrInvalidProblem when a mapper's answer was discarded, and whether the
-// answer is the 499 for a canceled request context. A problem of type
+// resolve returns the problem for err, whether the answer is the 499 for a
+// canceled request context, and the error to report, which adds
+// ErrInvalidProblem when a mapper's answer was discarded. A problem of type
 // about:blank without a title gets the status's reason phrase, so Annotate,
 // formats and OnError see the title the client reads.
-func (rs *resolver) resolve(req *http.Request, err error) (p problem.Problem, report error, canceled bool) {
-	p, report, canceled = rs.classify(req, err)
+func (rs *resolver) resolve(req *http.Request, err error) (p problem.Problem, canceled bool, report error) {
+	p, canceled, report = rs.classify(req, err)
 	p.Title = p.TitleOrStatus()
 	p, report = rs.annotated(req, report, p)
-	return p, report, canceled
+	return p, canceled, report
 }
 
 // annotated lets Config.Annotate add request data to p. An answer that
@@ -165,43 +165,43 @@ func clone(p problem.Problem) problem.Problem {
 // answered before mappers are consulted, so a catch-all mapper cannot turn
 // it into a 500; one that does not is the endpoint's to describe, and is
 // answered for the ended context only when no mapper knows it.
-func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, error, bool) {
+func (rs *resolver) classify(req *http.Request, err error) (problem.Problem, bool, error) {
 	if pe, ok := errors.AsType[*ParamsError](err); ok {
 		p, report := rs.refuse(err, err, pe.problem())
-		return p, report, false
+		return p, false, report
 	}
 	if re, ok := errors.AsType[*RequestError](err); ok {
 		if re.Status < 400 || re.Status > 599 {
-			return internalProblem(), errors.Join(err, fmt.Errorf("%w: RequestError status %d", ErrInvalidProblem, re.Status)), false
+			return internalProblem(), false, errors.Join(err, fmt.Errorf("%w: RequestError status %d", ErrInvalidProblem, re.Status))
 		}
 		p, report := rs.refuse(err, re, problem.Problem{Status: re.Status})
-		return p, report, false
+		return p, false, report
 	}
 	if p, ok := problem.FromError(err); ok {
 		if verr := p.Validate(); verr != nil {
-			return internalProblem(), errors.Join(err, fmt.Errorf("%w: %w", ErrInvalidProblem, verr)), false
+			return internalProblem(), false, errors.Join(err, fmt.Errorf("%w: %w", ErrInvalidProblem, verr))
 		}
-		return p, err, false
+		return p, false, err
 	}
 	if cause := req.Context().Err(); cause != nil && errors.Is(err, cause) {
 		p, canceled := ended(cause)
-		return p, err, canceled
+		return p, canceled, err
 	}
 	p, ok, perr := mapped(rs.domain, err)
 	if perr != nil {
-		return internalProblem(), errors.Join(err, perr), false
+		return internalProblem(), false, errors.Join(err, perr)
 	}
 	if ok {
 		if verr := p.Validate(); verr != nil {
-			return internalProblem(), errors.Join(err, fmt.Errorf("%w: %w", ErrInvalidProblem, verr)), false
+			return internalProblem(), false, errors.Join(err, fmt.Errorf("%w: %w", ErrInvalidProblem, verr))
 		}
-		return p, err, false
+		return p, false, err
 	}
 	if cause := req.Context().Err(); cause != nil {
 		p, canceled := ended(cause)
-		return p, err, canceled
+		return p, canceled, err
 	}
-	return internalProblem(), err, false
+	return internalProblem(), false, err
 }
 
 // refuse answers a request the router refuses with the problem carried in
@@ -238,7 +238,7 @@ func (rs *resolver) refuse(err, cause error, fixed problem.Problem) (problem.Pro
 // the response starts nothing tells the two apart: the flush that
 // trackingWriter.connectionLost probes with would send the response.
 func ended(cause error) (p problem.Problem, canceled bool) {
-	if cause == context.Canceled {
+	if errors.Is(cause, context.Canceled) {
 		return problem.Problem{Status: statusClientClosedRequest}, true
 	}
 	return problem.Problem{Status: http.StatusServiceUnavailable}, false
@@ -250,7 +250,7 @@ func internalProblem() problem.Problem {
 
 // fail answers err as a problem. The response must not have started.
 func (rs *resolver) fail(w http.ResponseWriter, req *http.Request, err error) {
-	p, report, canceled := rs.resolve(req, err)
+	p, canceled, report := rs.resolve(req, err)
 	rs.observe(req, report, p)
 	rs.write(w, req, p, canceled)
 }
@@ -291,7 +291,7 @@ func (rs *resolver) write(w http.ResponseWriter, req *http.Request, p problem.Pr
 		f = problem.Text
 		// Text writes to a bytes.Buffer, which cannot fail; its doc
 		// promises it never fails for a valid Problem.
-		_ = f.Write(&buf, p)
+		_ = f.Write(&buf, p) //nolint:errcheck // Text cannot fail for a valid Problem; see above.
 	}
 	for k, vs := range p.Header {
 		k = http.CanonicalHeaderKey(k)
@@ -308,7 +308,7 @@ func (rs *resolver) write(w http.ResponseWriter, req *http.Request, p problem.Pr
 	w.WriteHeader(p.Status)
 	// The problem was reported to OnError before it was written. A failed
 	// write leaves nothing to answer and no one to answer it to.
-	_, _ = w.Write(buf.Bytes())
+	w.Write(buf.Bytes()) //nolint:errcheck,gosec // Nothing is left to answer; see above.
 }
 
 // representationFields describe a response body. A problem replaces the

@@ -130,10 +130,10 @@ func New(cfg Config) (*Router, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := cfg.Errors.Err(); err != nil {
+	if err = cfg.Errors.Err(); err != nil {
 		return nil, fmt.Errorf("h: Config.Errors: %w", err)
 	}
-	if err := cfg.RequestErrors.Err(); err != nil {
+	if err = cfg.RequestErrors.Err(); err != nil {
 		return nil, fmt.Errorf("h: Config.RequestErrors: %w", err)
 	}
 	if cfg.Codecs == nil {
@@ -162,7 +162,7 @@ func New(cfg Config) (*Router, error) {
 		csrf: http.NewCrossOriginProtection(),
 	}
 	for _, o := range cfg.TrustedOrigins {
-		if err := c.csrf.AddTrustedOrigin(o); err != nil {
+		if err = c.csrf.AddTrustedOrigin(o); err != nil {
 			return nil, fmt.Errorf("h: trusted origin %q: %w", o, err)
 		}
 	}
@@ -186,7 +186,7 @@ func basePath(p string) (string, error) {
 	return p, nil
 }
 
-func (c *core) fail(format string, args ...any) {
+func (c *core) failf(format string, args ...any) {
 	c.errs = append(c.errs, fmt.Errorf("%w: "+format, append([]any{ErrSetup}, args...)...))
 }
 
@@ -200,12 +200,12 @@ func (r *Router) Group(prefix string, opts ...Option) *Router {
 		return g
 	}
 	if prefix != "" && (!strings.HasPrefix(prefix, "/") || strings.HasSuffix(prefix, "/") || path.Clean(prefix) != prefix) {
-		r.core.fail("group prefix %q must be empty, or start with /, not end with /, and be clean", prefix)
+		r.core.failf("group prefix %q must be empty, or start with /, not end with /, and be clean", prefix)
 		return g
 	}
 	l, err := levelOf(opts, false)
 	if err != nil {
-		r.core.fail("group %q: %v", g.prefix, err)
+		r.core.failf("group %q: %v", g.prefix, err)
 		return g
 	}
 	g.level, g.broken = l, false
@@ -220,7 +220,7 @@ func (r *Router) Use(ms ...Middleware) {
 		return
 	}
 	if slices.ContainsFunc(ms, func(m Middleware) bool { return m == nil }) {
-		r.core.fail("Use with a nil middleware")
+		r.core.failf("Use with a nil middleware")
 		return
 	}
 	if r.parent == nil {
@@ -238,7 +238,7 @@ func (r *Router) mutable(change string) bool {
 		return false
 	}
 	if r.core.served != nil {
-		r.core.fail("%s after Handler", change)
+		r.core.failf("%s after Handler", change)
 		return false
 	}
 	return true
@@ -318,7 +318,7 @@ func (c *core) wrap(mux *http.ServeMux) http.Handler {
 func (c *core) install(mux *http.ServeMux, p pending) {
 	res, err := p.r.resolve(p.own)
 	if err != nil {
-		c.fail("%s %s: %v", p.method, p.path, err)
+		c.failf("%s %s: %v", p.method, p.path, err)
 		return
 	}
 	var patterns []string
@@ -328,16 +328,17 @@ func (c *core) install(mux *http.ServeMux, p pending) {
 			patterns = append(patterns, exact)
 		}
 	} else {
-		full, err := p.r.full(p.path)
+		var full string
+		full, err = p.r.full(p.path)
 		if err != nil {
-			c.fail("%s %q: %v", p.method, p.path, err)
+			c.failf("%s %q: %v", p.method, p.path, err)
 			return
 		}
 		patterns = append(patterns, p.method+" "+full)
 	}
 	h, err := p.build(res, patterns[0])
 	if err != nil {
-		c.fail("route %q: %v", patterns[0], err)
+		c.failf("route %q: %v", patterns[0], err)
 		return
 	}
 	h = chain(res.use, h)
@@ -347,7 +348,7 @@ func (c *core) install(mux *http.ServeMux, p pending) {
 	h = route{Handler: h, fallback: p.fallback}
 	for _, pattern := range patterns {
 		if err := handle(mux, pattern, h); err != nil {
-			c.fail("%v", err)
+			c.failf("%v", err)
 			return
 		}
 	}
@@ -500,12 +501,12 @@ func (r *Router) full(p string) (string, error) {
 func (r *Router) register(method, p string, opts []Option, build func(res resolved, pattern string) (http.Handler, error)) {
 	c := r.core
 	if method == "" || strings.ContainsAny(method, " \t") {
-		c.fail("invalid method %q", method)
+		c.failf("invalid method %q", method)
 		return
 	}
 	own, err := levelOf(opts, true)
 	if err != nil {
-		c.fail("%s %q: %v", method, p, err)
+		c.failf("%s %q: %v", method, p, err)
 		return
 	}
 	c.routes = append(c.routes, pending{r: r, method: method, path: p, own: own, build: build})
@@ -549,7 +550,7 @@ func (r *Router) Handle(method, path string, fn func(http.ResponseWriter, *http.
 		return
 	}
 	if fn == nil {
-		r.core.fail("%s %q: nil handler", method, path)
+		r.core.failf("%s %q: nil handler", method, path)
 		return
 	}
 	r.register(method, path, opts, func(res resolved, _ string) (http.Handler, error) {
@@ -603,7 +604,7 @@ func (r *Router) Fallback() {
 		build: func(res resolved, _ string) (http.Handler, error) {
 			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 				if methods := c.allowed(req); len(methods) > 0 {
-					p, report, canceled := res.resolver.resolve(req, &RequestError{Status: http.StatusMethodNotAllowed, Err: ErrMethodNotAllowed})
+					p, canceled, report := res.resolver.resolve(req, &RequestError{Status: http.StatusMethodNotAllowed, Err: ErrMethodNotAllowed})
 					if p.Status == http.StatusMethodNotAllowed {
 						p.Header = p.Header.Clone()
 						if p.Header == nil {
@@ -678,7 +679,7 @@ func (t *trackingWriter) Unwrap() http.ResponseWriter { return t.ResponseWriter 
 
 // Flush sends buffered data, ignoring an error as http.Flusher requires;
 // use http.ResponseController to see it.
-func (t *trackingWriter) Flush() { _ = t.FlushError() }
+func (t *trackingWriter) Flush() { _ = t.FlushError() } //nolint:errcheck // http.Flusher has no error result; FlushError reports it.
 
 // FlushError sends buffered data and reports why it could not. After a
 // successful flush the response has started.
@@ -762,7 +763,7 @@ func contain(f func() error) (err error) {
 // panicError turns a recovered value into a *PanicError, re-raising
 // http.ErrAbortHandler, which net/http handles itself.
 func panicError(v any) error {
-	if v == http.ErrAbortHandler {
+	if v == http.ErrAbortHandler { //nolint:errorlint // net/http matches the recovered value by identity, not by wrapping.
 		panic(v)
 	}
 	return &PanicError{Value: v, Stack: debug.Stack()}

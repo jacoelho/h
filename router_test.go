@@ -264,11 +264,12 @@ func TestChangesAfterHandlerAreReportedNotApplied(t *testing.T) {
 	}{
 		{"route", func(r *h.Router) { r.Get("/b", respond(h.OK(item{"b"}))) },
 			call{method: "GET", target: "/b"},
-			func(t *testing.T, w *htest.Response) { w.Expect(t, http.StatusNotFound) },
+			func(t *testing.T, w *htest.Response) { t.Helper(); w.Expect(t, http.StatusNotFound) },
 			`"/b" registered after Handler`},
 		{"root Use", func(r *h.Router) { r.Use(addHeader("X-Late", "1")) },
 			call{method: "GET", target: "/a"},
 			func(t *testing.T, w *htest.Response) {
+				t.Helper()
 				if w.Header().Get("X-Late") != "" {
 					t.Fatal("late middleware ran")
 				}
@@ -276,11 +277,12 @@ func TestChangesAfterHandlerAreReportedNotApplied(t *testing.T) {
 			"Use after Handler"},
 		{"group", func(r *h.Router) { r.Group("/g").Get("/x", respond(h.OK(item{"x"}))) },
 			call{method: "GET", target: "/g/x"},
-			func(t *testing.T, w *htest.Response) { w.Expect(t, http.StatusNotFound) },
+			func(t *testing.T, w *htest.Response) { t.Helper(); w.Expect(t, http.StatusNotFound) },
 			`Group "/g" created after Handler`},
 		{"fallback", func(r *h.Router) { r.Fallback() },
 			call{method: "GET", target: "/nope"},
 			func(t *testing.T, w *htest.Response) {
+				t.Helper()
 				if w.Header().Get("Content-Type") == "application/problem+json" {
 					t.Fatal("late fallback answered")
 				}
@@ -361,7 +363,11 @@ func TestHandleErrorAfterHijackIsNotWritten(t *testing.T) {
 				if viaController {
 					conn, brw, err = http.NewResponseController(w).Hijack()
 				} else {
-					conn, brw, err = w.(http.Hijacker).Hijack()
+					hj, ok := w.(http.Hijacker)
+					if !ok {
+						return errors.New("response writer is not a Hijacker")
+					}
+					conn, brw, err = hj.Hijack()
 				}
 				if err != nil {
 					return err
@@ -372,7 +378,11 @@ func TestHandleErrorAfterHijackIsNotWritten(t *testing.T) {
 				return errors.New("socket failed after hijack")
 			})
 			s := serve(t, r)
-			resp, err := http.Get(s.URL + "/ws")
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.URL+"/ws", http.NoBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -394,17 +404,19 @@ func TestHandleErrorAfterHijackIsNotWritten(t *testing.T) {
 func TestHandleErrorAfterFlush(t *testing.T) {
 	cases := []struct {
 		name       string
-		writer     func(http.ResponseWriter) http.ResponseWriter
+		writer     func(*httptest.ResponseRecorder) http.ResponseWriter
 		flush      func(http.ResponseWriter)
 		wantStatus int
 		wantErr    error
 	}{
 		{"Flusher then error aborts", nil,
-			func(w http.ResponseWriter) { w.(http.Flusher).Flush() }, 0, h.ErrEncodeAfterCommit},
+			func(w http.ResponseWriter) {
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			}, 0, h.ErrEncodeAfterCommit},
 		{"failed flush then error writes a problem",
-			func(w http.ResponseWriter) http.ResponseWriter {
-				return failingFlusher{w.(*httptest.ResponseRecorder)}
-			},
+			func(rec *httptest.ResponseRecorder) http.ResponseWriter { return failingFlusher{rec} },
 			func(w http.ResponseWriter) { _ = http.NewResponseController(w).Flush() }, http.StatusInternalServerError, nil},
 	}
 	for _, c := range cases {
@@ -415,21 +427,21 @@ func TestHandleErrorAfterFlush(t *testing.T) {
 				c.flush(w)
 				return errors.New("failed after flush")
 			})
-			var w http.ResponseWriter = httptest.NewRecorder()
-			rec := w.(*httptest.ResponseRecorder)
+			rec := httptest.NewRecorder()
+			var w http.ResponseWriter = rec
 			if c.writer != nil {
-				w = c.writer(w)
+				w = c.writer(rec)
 			}
 			aborted := func() (aborted bool) {
 				defer func() {
 					if v := recover(); v != nil {
-						if v != http.ErrAbortHandler {
+						if v != http.ErrAbortHandler { //nolint:errorlint // net/http matches the recovered value by identity, not by wrapping.
 							panic(v)
 						}
 						aborted = true
 					}
 				}()
-				handlerOf(t, r).ServeHTTP(w, httptest.NewRequest("GET", "/f", nil))
+				handlerOf(t, r).ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/f", http.NoBody))
 				return false
 			}()
 			if c.wantErr != nil {
@@ -452,7 +464,11 @@ func TestHandleErrorAfterEarlyHintsIsAProblem(t *testing.T) {
 		w.WriteHeader(http.StatusEarlyHints)
 		return errors.New("failed after hints")
 	})
-	resp, err := http.Get(serve(t, r).URL + "/hints")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, serve(t, r).URL+"/hints", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("connection aborted: %v", err)
 	}

@@ -38,15 +38,17 @@ func NewSet() *Set { return &Set{} }
 func Default(j JSON) *Set {
 	return &Set{
 		decoders: []decoding{
-			{dec: j, ranges: []media.Type{{Main: "application", Sub: "json"}, {Main: "application", Sub: "*+json"}}},
+			{dec: j, ranges: []media.Type{jsonType, {Main: jsonType.Main, Sub: "*+json"}}},
 			{dec: Text{}, ranges: []media.Type{{Main: "text", Sub: "plain"}}},
 		},
 		encoders: []encodingReg{
-			{enc: j, name: "application/json", typ: media.Type{Main: "application", Sub: "json"}},
+			{enc: j, name: jsonType.String(), typ: jsonType},
 			{enc: Text{}, name: "text/plain; charset=utf-8", typ: media.Type{Main: "text", Sub: "plain"}},
 		},
 	}
 }
+
+var jsonType = media.Type{Main: "application", Sub: "json"}
 
 // Decodes registers d for request bodies whose media type matches one of
 // mediaRanges, such as "application/json" or "application/*+json". It
@@ -220,7 +222,7 @@ func parseAll(names []string) ([]media.Type, error) {
 
 // Decoder returns the decoder for a request's Content-Type, or
 // ErrUnsupportedMediaType.
-func (r Route) Decoder(contentType string) (Decoder, error) {
+func (r Route) Decoder(contentType string) (Decoder, error) { //nolint:ireturn // A route chooses among the decoders registered in its Set.
 	t, ok := concrete(contentType)
 	if !ok {
 		return nil, ErrUnsupportedMediaType
@@ -250,7 +252,7 @@ func concrete(contentType string) (media.Type, bool) {
 
 // Encoder returns the encoder for a request's Accept field values and the
 // Content-Type to send, or ErrNotAcceptable.
-func (r Route) Encoder(accept []string) (Encoder, string, error) {
+func (r Route) Encoder(accept []string) (Encoder, string, error) { //nolint:ireturn // A route chooses among the encoders registered in its Set.
 	i, ok := media.Negotiate(accept, r.offers, false)
 	if !ok {
 		return nil, "", ErrNotAcceptable

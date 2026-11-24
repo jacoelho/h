@@ -20,26 +20,27 @@ import (
 // Client sends requests to one handler and records the answers. Paths given
 // to Do are relative to the router's base path.
 type Client struct {
-	t       testing.TB
+	tb      testing.TB
 	handler http.Handler
 	base    string
 }
 
-// New returns a Client for the handler r builds, failing t if r has setup
+// New returns a Client for the handler r builds, failing tb if r has setup
 // errors (h.Router.Handler).
-func New(t testing.TB, r *h.Router) *Client {
-	t.Helper()
+func New(tb testing.TB, r *h.Router) *Client {
+	tb.Helper()
 	handler, err := r.Handler()
 	if err != nil {
-		t.Fatalf("htest: router setup: %v", err)
+		tb.Fatalf("htest: router setup: %v", err)
 	}
-	return &Client{t: t, handler: handler, base: strings.TrimSuffix(r.Mount(), "/")}
+	return &Client{tb: tb, handler: handler, base: strings.TrimSuffix(r.Mount(), "/")}
 }
 
 // ForHandler returns a Client for any handler, such as an outer ServeMux a
 // router is mounted in. Paths given to Do are used as they are.
-func ForHandler(t testing.TB, handler http.Handler) *Client {
-	return &Client{t: t, handler: handler}
+func ForHandler(tb testing.TB, handler http.Handler) *Client {
+	tb.Helper()
+	return &Client{tb: tb, handler: handler}
 }
 
 // RequestOption changes a request before Do sends it.
@@ -54,7 +55,7 @@ func Header(key, value string) RequestOption {
 // sends none; a string, []byte or io.Reader is sent as it is; any other
 // value is sent as JSON with Content-Type application/json.
 func (c *Client) Do(method, path string, body any, opts ...RequestOption) *Response {
-	c.t.Helper()
+	c.tb.Helper()
 	var r io.Reader
 	isJSON := false
 	switch b := body.(type) {
@@ -68,14 +69,14 @@ func (c *Client) Do(method, path string, body any, opts ...RequestOption) *Respo
 	default:
 		data, err := json.Marshal(b)
 		if err != nil {
-			c.t.Fatalf("htest: encoding %T: %v", body, err)
+			c.tb.Fatalf("htest: encoding %T: %v", body, err)
 		}
 		r, isJSON = bytes.NewReader(data), true
 	}
 	if !strings.HasPrefix(path, "/") {
-		c.t.Fatalf("htest: path %q does not start with /", path)
+		c.tb.Fatalf("htest: path %q does not start with /", path)
 	}
-	req := httptest.NewRequest(method, c.base+path, r)
+	req := httptest.NewRequestWithContext(c.tb.Context(), method, c.base+path, r)
 	if isJSON {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -92,7 +93,7 @@ func (c *Client) Send(req *http.Request) (resp *Response) {
 	resp = &Response{ResponseRecorder: httptest.NewRecorder()}
 	defer func() {
 		if v := recover(); v != nil {
-			if v != http.ErrAbortHandler {
+			if v != http.ErrAbortHandler { //nolint:errorlint // net/http matches the recovered value by identity, not by wrapping.
 				panic(v)
 			}
 			resp.Aborted = true
@@ -111,35 +112,35 @@ type Response struct {
 }
 
 // Expect fails t unless the response has status, showing the body.
-func (r *Response) Expect(t testing.TB, status int) *Response {
-	t.Helper()
+func (r *Response) Expect(tb testing.TB, status int) *Response {
+	tb.Helper()
 	if r.Code != status {
-		t.Fatalf("status %d, want %d; body %s", r.Code, status, r.Body)
+		tb.Fatalf("status %d, want %d; body %s", r.Code, status, r.Body)
 	}
 	return r
 }
 
 // Problem fails t unless the body is an RFC 9457 problem
 // (application/problem+json) and returns it.
-func (r *Response) Problem(t testing.TB) problem.Problem {
-	t.Helper()
+func (r *Response) Problem(tb testing.TB) problem.Problem {
+	tb.Helper()
 	if ct := r.Header().Get("Content-Type"); ct != problem.RFC9457.MediaType() {
-		t.Fatalf("Content-Type %q, want %s; body %s", ct, problem.RFC9457.MediaType(), r.Body)
+		tb.Fatalf("Content-Type %q, want %s; body %s", ct, problem.RFC9457.MediaType(), r.Body)
 	}
 	p, err := problem.Read(bytes.NewReader(r.Body.Bytes()))
 	if err != nil {
-		t.Fatalf("problem body %s: %v", r.Body, err)
+		tb.Fatalf("problem body %s: %v", r.Body, err)
 	}
 	return p
 }
 
 // JSON decodes the body as a T, failing t when it cannot. Decoding is strict:
 // unknown members and trailing data fail.
-func (r *Response) JSON[T any](t testing.TB) T {
-	t.Helper()
+func (r *Response) JSON[T any](tb testing.TB) T {
+	tb.Helper()
 	var v T
 	if err := json.Unmarshal(r.Body.Bytes(), &v, json.RejectUnknownMembers(true)); err != nil {
-		t.Fatalf("decoding %T from %s: %v", v, r.Body, err)
+		tb.Fatalf("decoding %T from %s: %v", v, r.Body, err)
 	}
 	return v
 }
@@ -166,12 +167,12 @@ func (e *Errors) All() []h.Failure {
 }
 
 // Last returns the latest failure, failing t when there was none.
-func (e *Errors) Last(t testing.TB) h.Failure {
-	t.Helper()
+func (e *Errors) Last(tb testing.TB) h.Failure {
+	tb.Helper()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if len(e.seen) == 0 {
-		t.Fatal("OnError not called")
+		tb.Fatal("OnError not called")
 	}
 	return e.seen[len(e.seen)-1]
 }

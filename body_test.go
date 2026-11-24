@@ -26,7 +26,7 @@ func TestStalledBodyTimesOut(t *testing.T) {
 	r.Post("/items", echo(nil))
 	s := serve(t, r)
 
-	conn, err := net.Dial("tcp", s.Listener.Addr().String())
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", s.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,13 +67,17 @@ type deadlineOnly struct {
 	at time.Time
 }
 
+func withReportedDeadline(parent context.Context, at time.Time) context.Context {
+	return deadlineOnly{parent, at}
+}
+
 func (d deadlineOnly) Deadline() (time.Time, bool) { return d.at, true }
 
 func TestFullyReadBodyKeepsContextPastDeadline(t *testing.T) {
 	r := newRouter(t, h.Config{})
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			ctx := deadlineOnly{req.Context(), time.Now().Add(100 * time.Millisecond)}
+			ctx := withReportedDeadline(req.Context(), time.Now().Add(100*time.Millisecond))
 			next.ServeHTTP(w, req.WithContext(ctx))
 		})
 	})
@@ -85,7 +89,12 @@ func TestFullyReadBodyKeepsContextPastDeadline(t *testing.T) {
 		return h.OK(req.Body()), nil
 	})
 	s := serve(t, r)
-	resp, err := http.Post(s.URL+"/items", "application/json", strings.NewReader(`{"name":"a"}`))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, s.URL+"/items", strings.NewReader(`{"name":"a"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +141,10 @@ func TestEmptyBodyPastDeadlineLeavesConnectionUsable(t *testing.T) {
 	s := serve(t, r)
 	client := s.Client()
 	post := func(target string) int {
-		req, _ := http.NewRequest("POST", s.URL+target, http.NoBody)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, s.URL+target, http.NoBody)
+		if err != nil {
+			t.Fatal(err)
+		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 		resp, err := client.Do(req)
 		if err != nil {
@@ -168,7 +180,12 @@ func TestReplacedBodyPastDeadlineLeavesConnectionUsable(t *testing.T) {
 	}, h.Consumes("application/octet-stream"))
 	s := serve(t, r)
 	post := func(target string) int {
-		resp, err := s.Client().Post(s.URL+target, "application/octet-stream", strings.NewReader("xyz"))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, s.URL+target, strings.NewReader("xyz"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		resp, err := s.Client().Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -192,7 +209,7 @@ func TestUnreadStalledBodyIsBoundedByReadTimeout(t *testing.T) {
 	s.Start()
 	t.Cleanup(s.Close)
 
-	conn, err := net.Dial("tcp", s.Listener.Addr().String())
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", s.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +238,11 @@ func TestPanickingOnErrorReachesServerErrorLog(t *testing.T) {
 	s.Start()
 	t.Cleanup(s.Close)
 
-	if resp, err := http.Get(s.URL + "/x"); err == nil {
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.URL+"/x", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, err := http.DefaultClient.Do(req); err == nil {
 		_ = resp.Body.Close()
 		t.Fatalf("got status %d, want the connection closed", resp.StatusCode)
 	}
@@ -290,7 +311,7 @@ func TestBodyReadDeadlineFollowsTheContextWhileABodyIsRead(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRouter(t, h.Config{})
 			r.Post("/items", echo(nil))
-			req := httptest.NewRequest("POST", "/items", strings.NewReader(c.body))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/items", strings.NewReader(c.body))
 			req.Header.Set("Content-Type", "application/json")
 			if !c.deadline.IsZero() {
 				ctx, cancel := context.WithDeadline(req.Context(), c.deadline)

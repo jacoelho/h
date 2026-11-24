@@ -29,7 +29,7 @@ func (c NDJSON) Encode(w io.Writer, v any) error {
 	if !ok {
 		return fmt.Errorf("codec: NDJSON cannot encode %T", v)
 	}
-	flusher, _ := w.(interface{ Flush() error })
+	flusher, flushes := w.(interface{ Flush() error })
 	for e, err := range seq.Elems() {
 		if err != nil {
 			return err
@@ -40,7 +40,7 @@ func (c NDJSON) Encode(w io.Writer, v any) error {
 		if _, err := io.WriteString(w, "\n"); err != nil {
 			return err
 		}
-		if flusher != nil {
+		if flushes {
 			if err := flusher.Flush(); err != nil {
 				return err
 			}

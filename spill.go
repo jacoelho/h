@@ -29,7 +29,7 @@ func (s *spillWriter) Write(p []byte) (int, error) {
 		return s.x.tw.Write(p)
 	}
 	if s.buf == nil {
-		s.buf = spillBuffers.Get().(*bytes.Buffer)
+		s.buf = spillBuffers.Get().(*bytes.Buffer) //nolint:errcheck,forcetypeassert,revive // spillBuffers holds only *bytes.Buffer.
 	}
 	s.buf.Write(p)
 	if s.buf.Len() > s.limit {

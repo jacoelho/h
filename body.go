@@ -67,20 +67,20 @@ func (b *bodyReader) Read(p []byte) (int, error) {
 		// A writer without deadline support (httptest.ResponseRecorder, some
 		// middleware writers without Unwrap) leaves reads bounded only by the
 		// server's own ReadTimeout.
-		_ = http.NewResponseController(b.w).SetReadDeadline(b.deadline)
+		_ = http.NewResponseController(b.w).SetReadDeadline(b.deadline) //nolint:errcheck // Unsupported writers fall back to ReadTimeout; see above.
 	}
 	n, err := b.r.Read(p)
 	if err == nil {
 		return n, nil
 	}
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		err = classifyRead(err)
 	}
 	b.err = err
-	if err == io.EOF && b.deadlineTried {
+	if errors.Is(err, io.EOF) && b.deadlineTried {
 		// Clearing fails only where setting failed too, for a writer without
 		// deadline support, or where the connection is gone.
-		_ = http.NewResponseController(b.w).SetReadDeadline(time.Time{})
+		_ = http.NewResponseController(b.w).SetReadDeadline(time.Time{}) //nolint:errcheck // Fails only where setting failed or the connection is gone; see above.
 	}
 	return n, err
 }

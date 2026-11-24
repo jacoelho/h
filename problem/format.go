@@ -47,10 +47,10 @@ func (rfc9457) Write(w io.Writer, p Problem) error {
 		v    any
 		omit bool
 	}{
-		{"type", p.TypeOrBlank(), false},
-		{"title", p.TitleOrStatus(), p.TitleOrStatus() == ""},
-		{"status", p.Status, false},
-		{"detail", p.Detail, p.Detail == ""},
+		{memberType, p.TypeOrBlank(), false},
+		{memberTitle, p.TitleOrStatus(), p.TitleOrStatus() == ""},
+		{memberStatus, p.Status, false},
+		{memberDetail, p.Detail, p.Detail == ""},
 	}
 	for _, m := range members {
 		if m.omit {
@@ -79,7 +79,7 @@ func (text) Write(w io.Writer, p Problem) error {
 
 // JSON returns a Format writing shape(p) as JSON under mediaType, for an API
 // whose clients read an error shape of their own.
-func JSON(mediaType string, shape func(Problem) any) Format {
+func JSON(mediaType string, shape func(Problem) any) Format { //nolint:iface,ireturn // Config.ProblemFormats takes Formats; jsonShape stays unexported.
 	return jsonShape{mediaType: mediaType, shape: shape}
 }
 

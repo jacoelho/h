@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -277,9 +278,7 @@ func TestPanicBecomesProblem(t *testing.T) {
 			rec := httptest.NewRecorder()
 			next.ServeHTTP(rec, req)
 			status = rec.Code
-			for k, v := range rec.Header() {
-				w.Header()[k] = v
-			}
+			maps.Copy(w.Header(), rec.Header())
 			w.WriteHeader(rec.Code)
 			_, _ = w.Write(rec.Body.Bytes())
 		})

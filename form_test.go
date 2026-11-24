@@ -162,7 +162,7 @@ func TestTooManyMultipartParts(t *testing.T) {
 	r := newRouter(t, h.Config{MaxBody: 1 << 20})
 	var got signup
 	r.Post("/signup", signupEndpoint(&got))
-	req := httptest.NewRequest("POST", "/signup", strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/signup", strings.NewReader(body))
 	req.Header.Set("Content-Type", ct)
 	htest.New(t, r).Send(req).Expect(t, http.StatusRequestEntityTooLarge)
 }

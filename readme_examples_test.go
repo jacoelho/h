@@ -119,7 +119,7 @@ func TestCreateOrder(t *testing.T) {
 // README end
 
 func fetch(handler http.Handler, target string, header ...string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest("GET", target, nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
 	for i := 0; i+1 < len(header); i += 2 {
 		req.Header.Set(header[i], header[i+1])
 	}
@@ -175,8 +175,15 @@ func ExampleRequest_Parse() {
 		log.Fatal(err)
 	}
 	fmt.Println(p.Status)
-	for _, v := range p.Extra["invalid_params"].([]any) {
-		param := v.(map[string]any)
+	params, ok := p.Extra["invalid_params"].([]any)
+	if !ok {
+		log.Fatalf("invalid_params is %T, want a list", p.Extra["invalid_params"])
+	}
+	for _, v := range params {
+		param, ok := v.(map[string]any)
+		if !ok {
+			log.Fatalf("invalid_params element is %T, want an object", v)
+		}
 		fmt.Println(param["in"], param["name"], param["reason"])
 	}
 	// Output:
