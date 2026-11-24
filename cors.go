@@ -32,11 +32,11 @@ func (c CORS) isZero() bool {
 }
 
 type corsPolicy struct {
-	origins      []string
 	allowHeaders string
 	expose       string
-	credentials  bool
 	maxAge       string
+	origins      []string
+	credentials  bool
 }
 
 func newCORSPolicy(origins []string, c CORS) (corsPolicy, error) {

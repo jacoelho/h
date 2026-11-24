@@ -76,10 +76,6 @@ linters:
   settings:
     govet:
       enable-all: true
-      disable:
-        # Fields follow the order their docs read in, such as Config's and
-        # Problem's, not the order that packs them tightest.
-        - fieldalignment
 
     errcheck:
       check-blank: true
@@ -283,6 +279,14 @@ linters:
         text: "unused-parameter:"
         linters:
           - revive
+      - path: _test\.go
+        linters:
+          - govet
+        text: "fieldalignment"
+      # Exported fields stay in the order their docs read in.
+      - linters:
+          - govet
+        text: "fieldalignment: (Config|Problem|RequestError|ParamError|JSON) has"
       - path: _test\.go
         linters:
           - govet

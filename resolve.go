@@ -74,11 +74,11 @@ type mapping struct {
 // resolver turns errors into problems for one route or scope: the mappers,
 // the formats to write problems in, and the observer.
 type resolver struct {
-	mapping
-	formats  []problem.Format
-	offers   []media.Type
 	annotate func(Failure) problem.Problem
 	onError  func(Failure)
+	mapping
+	formats []problem.Format
+	offers  []media.Type
 }
 
 func newResolver(m mapping, formats []problem.Format, annotate func(Failure) problem.Problem, onError func(Failure)) (*resolver, error) {
@@ -262,19 +262,24 @@ func (rs *resolver) observe(req *http.Request, err error, p problem.Problem) {
 }
 
 // write sends p. For a canceled request context it sends only the status,
-// since nothing more would reach a client that went away.
+// since nothing more would reach a client that went away. A body that fails
+// to write is a response that failed after it started: it is reported and
+// the connection is aborted.
 func (rs *resolver) write(w http.ResponseWriter, req *http.Request, p problem.Problem, canceled bool) {
-	h := w.Header()
+	tw, ok := w.(*trackingWriter)
+	if !ok {
+		tw = &trackingWriter{ResponseWriter: w}
+		tw.inherit()
+	}
+	h := tw.Header()
 	h.Del("Content-Length")
-	if tw, ok := w.(*trackingWriter); ok {
-		for i, k := range representationFields {
-			if tw.inherited&(1<<i) == 0 {
-				h.Del(k)
-			}
+	for i, k := range representationFields {
+		if tw.inherited&(1<<i) == 0 {
+			h.Del(k)
 		}
 	}
 	if canceled {
-		w.WriteHeader(p.Status)
+		tw.WriteHeader(p.Status)
 		return
 	}
 	i, ok := media.Negotiate(req.Header.Values("Accept"), rs.offers, true)
@@ -305,10 +310,10 @@ func (rs *resolver) write(w http.ResponseWriter, req *http.Request, p problem.Pr
 	}
 	h.Set("Content-Type", f.MediaType())
 	addVary(h, "Accept")
-	w.WriteHeader(p.Status)
-	// The problem was reported to OnError before it was written. A failed
-	// write leaves nothing to answer and no one to answer it to.
-	w.Write(buf.Bytes()) //nolint:errcheck,gosec // Nothing is left to answer; see above.
+	tw.WriteHeader(p.Status)
+	if _, err := tw.Write(buf.Bytes()); err != nil {
+		abort(req, rs, err, tw.connectionLost(req, err))
+	}
 }
 
 // representationFields describe a response body. A problem replaces the

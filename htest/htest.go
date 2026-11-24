@@ -148,8 +148,8 @@ func (r *Response) JSON[T any](tb testing.TB) T {
 // Errors records OnError calls. Pass its OnError method as h.Config.OnError.
 // It is safe for concurrent use.
 type Errors struct {
-	mu   sync.Mutex
 	seen []h.Failure
+	mu   sync.Mutex
 }
 
 // OnError records f.

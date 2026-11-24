@@ -14,10 +14,10 @@ import (
 // Status. The zero Response answers 200, or 204 when Out is Empty; with Out
 // a Seq it is an empty sequence.
 type Response[Out any] struct {
+	body     Out
+	header   []headerField
 	status   int
 	explicit bool // status was chosen with Status, so 0 is a mistake, not the default
-	header   []headerField
-	body     Out
 	bodiless bool
 }
 

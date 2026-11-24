@@ -62,6 +62,13 @@ func outKindOf(t reflect.Type) outKind {
 	return outEncoded
 }
 
+// identity returns the identity function from A to B, and whether there is
+// one: whether A and B are the same type.
+func identity[A, B any]() (func(A) B, bool) {
+	f, ok := any(func(a A) A { return a }).(func(A) B)
+	return f, ok
+}
+
 func registerEndpoint[In, Out any](r *Router, method, path string, e Endpoint[In, Out], opts []Option) {
 	if !r.mutable(fmt.Sprintf("%s %q registered", method, path)) {
 		return
@@ -91,18 +98,39 @@ func registerEndpoint[In, Out any](r *Router, method, path string, e Endpoint[In
 		if inK == inRaw && len(res.consumes) == 0 {
 			return nil, errors.New("a RawBody route must set Consumes")
 		}
-		return &adapter[In, Out]{
+		a := &adapter[In, Out]{
 			endpoint: e, base: r.core.base, res: res, route: route, in: inK, out: outK,
 			duplex: inK == inRaw || codec.IsSequenceTarget(inT),
-		}, nil
+		}
+		var ok bool
+		switch inK {
+		case inForm:
+			a.fromForm, ok = identity[Form, In]()
+		case inRaw:
+			a.fromRaw, ok = identity[RawBody, In]()
+		default:
+			ok = true
+		}
+		if outK == outStream && ok {
+			a.toStream, ok = identity[Out, Stream]()
+		}
+		if !ok {
+			return nil, fmt.Errorf("input %v or output %v does not match its kind", inT, outT)
+		}
+		return a, nil
 	})
 }
 
 type adapter[In, Out any] struct {
 	endpoint Endpoint[In, Out]
+	// fromForm, fromRaw and toStream are set for the kinds of In and Out
+	// that are Form, RawBody and Stream, so a request needs no assertion.
+	fromForm func(Form) In
+	fromRaw  func(RawBody) In
+	toStream func(Out) Stream
 	base     string
-	res      resolved
 	route    codec.Route
+	res      resolved
 	in       inKind
 	out      outKind
 	duplex   bool // the endpoint reads the body while the response is written
@@ -112,17 +140,17 @@ type adapter[In, Out any] struct {
 // per request: the writer, the request's parsed values, the body reader and
 // the response writers all live in it.
 type exchange struct {
-	tw          trackingWriter
-	st          requestState
-	body        bodyReader
-	spill       spillWriter
-	stream      StreamWriter
-	status      int
-	contentType string
-	header      []headerField
+	body  bodyReader
+	st    requestState
+	spill spillWriter
 	// cleanup removes multipart temporary files. It is set as soon as the
 	// form is parsed, so it runs even when the endpoint panics.
-	cleanup func() error
+	cleanup     func() error
+	tw          trackingWriter
+	stream      StreamWriter
+	contentType string
+	header      []headerField
+	status      int
 }
 
 // runStream runs the stream's write function with a writer that closes
@@ -145,8 +173,8 @@ func (x *exchange) start() {
 }
 
 type call[In any] struct {
-	exchange
 	in In
+	exchange
 }
 
 func (a *adapter[In, Out]) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -225,13 +253,13 @@ func (a *adapter[In, Out]) readInput(c *call[In], req *http.Request) error {
 		if err != nil {
 			return err
 		}
-		c.in = any(f).(In) //nolint:errcheck,forcetypeassert,revive // inKindOf returns inForm only when In is Form.
+		c.in = a.fromForm(f)
 		return nil
 	case inRaw:
 		if !a.route.Consumes(match) {
 			return &RequestError{Status: http.StatusUnsupportedMediaType, Err: ErrUnsupportedMediaType}
 		}
-		c.in = any(RawBody{contentType: ct, r: &x.body}).(In) //nolint:errcheck,forcetypeassert,revive // inKindOf returns inRaw only when In is RawBody.
+		c.in = a.fromRaw(RawBody{contentType: ct, r: &x.body})
 		return nil
 	default:
 		dec, err := a.route.Decoder(match)
@@ -253,9 +281,8 @@ func (a *adapter[In, Out]) write(x *exchange, resp Response[Out], enc codec.Enco
 		x.start()
 		return nil
 	}
-	body := any(resp.Body())
 	if a.out == outStream {
-		s := body.(Stream) //nolint:errcheck,forcetypeassert,revive // a.out is outStream only when Out is Stream.
+		s := a.toStream(resp.Body())
 		if s.write == nil {
 			return fmt.Errorf("%w: zero Stream", ErrInvalidResponse)
 		}
@@ -272,6 +299,7 @@ func (a *adapter[In, Out]) write(x *exchange, resp Response[Out], enc codec.Enco
 	x.contentType = contentType
 	x.spill = spillWriter{x: x, limit: a.res.spillAt}
 	defer x.spill.release()
+	body := any(resp.Body())
 	err := enc.Encode(&x.spill, body)
 	if so, ok := body.(seqOutput); ok {
 		if serr := so.sourceErr(); serr != nil {

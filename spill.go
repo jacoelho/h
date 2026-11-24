@@ -20,8 +20,8 @@ const maxPooledSpill = 256 << 10
 // the rest.
 type spillWriter struct {
 	x     *exchange
-	limit int
 	buf   *bytes.Buffer
+	limit int
 }
 
 func (s *spillWriter) Write(p []byte) (int, error) {

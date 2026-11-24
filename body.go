@@ -27,11 +27,11 @@ import (
 // unread body from blocking on a stalled client before the response is
 // written.
 type bodyReader struct {
+	deadline      time.Time
 	r             io.ReadCloser
 	w             http.ResponseWriter
-	deadline      time.Time
-	deadlineTried bool
 	err           error
+	deadlineTried bool
 }
 
 func newBodyReader(w http.ResponseWriter, req *http.Request, limit int64) *bodyReader {
